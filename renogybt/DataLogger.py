@@ -4,6 +4,7 @@ import requests
 import paho.mqtt.publish as publish
 from configparser import ConfigParser
 from datetime import datetime
+import numbers
 
 PVOUTPUT_URL = 'http://pvoutput.org/service/r2/addstatus.jsp'
 
@@ -37,3 +38,30 @@ class DataLogger:
             "X-Pvoutput-SystemId":  self.config['pvoutput']['system_id']
         })
         print(f"pvoutput {response}")
+
+    def log_influxdb2(self, json_data):
+        from influxdb_client import InfluxDBClient, Point
+        from influxdb_client.client.write_api import SYNCHRONOUS
+        
+        logging.debug("influxdb2 logging")
+        url = self.config['influxdb2']['url']
+        token = self.config['influxdb2'].get('token', None)
+        org = self.config['influxdb2']['org']
+        bucket = self.config['influxdb2']['bucket']
+
+        p = Point("renogy")
+        for key, value in json_data.items():
+            if value is None:
+                continue
+            if isinstance(value, str):
+                p = p.tag(key, value)
+            elif isinstance(value, numbers.Number):
+                p = p.field(key, value)
+            else:
+                logging.info(f"Ignoring key {key} with unsupported data type. Value: {value}")
+
+        logging.debug(f"Point: {p}")
+
+        client = InfluxDBClient(url=url, token=token, org=org)
+        write_api = client.write_api(write_options=SYNCHRONOUS)
+        write_api.write(bucket=bucket, record=p)
