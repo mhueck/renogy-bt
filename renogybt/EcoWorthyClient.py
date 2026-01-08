@@ -3,7 +3,7 @@ import configparser
 import logging
 import traceback
 from .BLEManager import BLEManager
-from .Utils import bytes_to_int, crc16_modbus, int_to_bytes
+from .Utils import bytes_to_int, crc16_modbus, format_temperature, int_to_bytes
 
 
 ALIAS_PREFIXES = ['DP']
@@ -35,7 +35,7 @@ class EcoWorthyClient:
         self.fetched_cellv = False
         self.loop = None
         self.active_operation = None
-        self.payload = None
+        self.frame = None
         logging.info(f"Init {self.__class__.__name__}: {self.config['device']['alias']} => {self.config['device']['mac_addr']}")
 
     def start(self):
@@ -82,26 +82,31 @@ class EcoWorthyClient:
         frame_end = response[-1]
 
         if frame_header != FRAME_HEADER and self.active_operation:
-            self.payload += response
+            self.frame += response
             logging.info(f"Adding {frame_len} bytes to existing frame for operation {self.active_operation}")
         elif frame_header == FRAME_HEADER:
             operation = bytes_to_int(response, 1, 1)
             status = bytes_to_int(response, 2, 1)
             data_length = bytes_to_int(response, 3, 1)
-            self.payload = response[4:]
+            self.frame = response
             self.active_operation = operation
             logging.info(f"Received new frame, frame header: {frame_header}, operation: {operation}, status: {status}, data length: {data_length}, frame length: {frame_len}")
 
         if frame_end == FRAME_END:
+            data_length = bytes_to_int(self.frame, 3, 1)
+            payload = self.frame[4:-3]
+            logging.info(f"Payload size is {len(payload)}, expecting {data_length}")
             if self.active_operation == OPERATION_BASIC_INFO:
 
                 data = {}
-                data['voltage'] = bytes_to_int(self.payload, 0, 2, signed=False, scale=0.01)
-                data['current'] = bytes_to_int(self.payload, 2, 4, signed=True, scale=0.01)
-                data['capacity_remaining'] = bytes_to_int(self.payload, 4, 6, signed=False, scale=0.01)
-                data['capacity'] = bytes_to_int(self.payload, 4, 6, signed=False, scale=0.01)
-                data['temperature'] = bytes_to_int(self.payload, 23, 25, signed=False, scale=0.1) - 273.1
-
+                data['voltage'] = bytes_to_int(payload, 0, 2, signed=False, scale=0.01)
+                data['current'] = bytes_to_int(payload, 2, 4, signed=True, scale=0.01)
+                data['capacity_remaining'] = bytes_to_int(payload, 4, 6, signed=False, scale=0.01)
+                data['capacity'] = bytes_to_int(payload, 4, 6, signed=False, scale=0.01)
+                data['temperature'] = bytes_to_int(payload, 23, 25, signed=False, scale=0.1) - 273.1
+                temp_unit = self.config['data']['temperature_unit'].strip()
+                if temp_unit == "F":
+                    data['temperature'] = format_temperature(data['temperature'])
                 data['power'] = data['voltage'] * data['current']
                 data['percentage'] = 0 if data['capacity'] == 0 else 100.0 * data['capacity_remaining'] / data['capacity']
 
@@ -113,7 +118,7 @@ class EcoWorthyClient:
                 data = {}
                 no_cells = int(data_length / 2)
                 for cell in range(1, no_cells+1):
-                    data[f'voltage_cell{cell}'] = bytes_to_int(self.payload, 2*(cell-1), 2*cell, signed=False, scale=0.001)
+                    data[f'voltage_cell{cell}'] = bytes_to_int(payload, 2*(cell-1), 2*cell, signed=False, scale=0.001)
 
                 self.data.update(data)
                 self.fetched_cellv = True
@@ -121,7 +126,7 @@ class EcoWorthyClient:
             else:
                 logging.warning("on_data_received: unknown operation={}".format(operation))
             self.active_operation = None
-            self.payload = None
+            self.frame = None
         else:
             logging.info("Still waiting for frame end.")
 
