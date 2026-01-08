@@ -34,7 +34,6 @@ class EcoWorthyClient:
         self.fetched_basics = False
         self.fetched_cellv = False
         self.loop = None
-        self.active_operation = None
         self.frame = None
         logging.info(f"Init {self.__class__.__name__}: {self.config['device']['alias']} => {self.config['device']['mac_addr']}")
 
@@ -81,22 +80,22 @@ class EcoWorthyClient:
         frame_header = response[0]
         frame_end = response[-1]
 
-        if frame_header != FRAME_HEADER and self.active_operation:
+        if frame_header != FRAME_HEADER and self.frame:
             self.frame += response
-            logging.info(f"Adding {frame_len} bytes to existing frame for operation {self.active_operation}")
+            logging.info(f"Adding {frame_len} bytes to existing frame.")
         elif frame_header == FRAME_HEADER:
             operation = bytes_to_int(response, 1, 1)
             status = bytes_to_int(response, 2, 1)
             data_length = bytes_to_int(response, 3, 1)
             self.frame = response
-            self.active_operation = operation
             logging.info(f"Received new frame, frame header: {frame_header}, operation: {operation}, status: {status}, data length: {data_length}, frame length: {frame_len}")
 
         if frame_end == FRAME_END:
+            operation = bytes_to_int(self.frame, 1, 1)
             data_length = bytes_to_int(self.frame, 3, 1)
             payload = self.frame[4:-3]
             logging.info(f"Payload size is {len(payload)}, expecting {data_length}")
-            if self.active_operation == OPERATION_BASIC_INFO:
+            if operation == OPERATION_BASIC_INFO:
 
                 data = {}
                 data['voltage'] = bytes_to_int(payload, 0, 2, signed=False, scale=0.01)
@@ -113,7 +112,7 @@ class EcoWorthyClient:
                 self.data.update(data)
                 self.fetched_basics = True
                 await self.fetch_next()
-            elif self.active_operation == OPERATION_CELLV_INFO:
+            elif operation == OPERATION_CELLV_INFO:
 
                 data = {}
                 no_cells = int(data_length / 2)
@@ -125,7 +124,6 @@ class EcoWorthyClient:
                 await self.fetch_next()
             else:
                 logging.warning("on_data_received: unknown operation={}".format(operation))
-            self.active_operation = None
             self.frame = None
         else:
             logging.info("Still waiting for frame end.")
@@ -183,12 +181,4 @@ class EcoWorthyClient:
                 calback(self, param)
             except Exception as e:
                 logging.error(f"__safe_callback => exception in callback! {e}")
-                traceback.print_exc()
-
-    def __safe_parser(self, parser, param):
-        if parser is not None:
-            try:
-                parser(param)
-            except Exception as e:
-                logging.error(f"exception in parser! {e}")
                 traceback.print_exc()
