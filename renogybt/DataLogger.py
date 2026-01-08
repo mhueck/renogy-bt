@@ -49,7 +49,7 @@ class DataLogger:
         org = self.config['influxdb2']['org']
         bucket = self.config['influxdb2']['bucket']
 
-        p = Point("renogy")
+        p = Point(self.config['influxdb2'].get("measurement", "renogy"))
         for key, value in json_data.items():
             if value is None:
                 continue

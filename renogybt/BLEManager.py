@@ -65,6 +65,15 @@ class BLEManager:
         except Exception as e:
             logging.info(f'characteristic_write_value failed {e}')
 
+    async def characteristic_write_bytes(self, data):
+        try:
+            logging.info(f'writing to {self.write_char_uuid} {data}')
+            await self.client.write_gatt_char(self.write_char_handle, data, response=False)
+            logging.info('characteristic_write_value succeeded')
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logging.info(f'characteristic_write_value failed {e}')
+
     async def disconnect(self):
         if self.client and self.client.is_connected:
             logging.info(f"Exit: Disconnecting device: {self.device.name} {self.device.address}")
