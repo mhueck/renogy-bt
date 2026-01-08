@@ -31,9 +31,10 @@ class BLEManager:
                 self.device = dev
 
     async def connect(self):
-        if not self.device: return logging.error("No device connected!")
-
-        self.client = BleakClient(self.device)
+        if not self.device:
+            self.client = BleakClient(self.mac_address)
+        else:
+            self.client = BleakClient(self.device)
         try:
             await self.client.connect()
             logging.info(f"Client connection: {self.client.is_connected}")
@@ -76,5 +77,5 @@ class BLEManager:
 
     async def disconnect(self):
         if self.client and self.client.is_connected:
-            logging.info(f"Exit: Disconnecting device: {self.device.name} {self.device.address}")
+            logging.info(f"Exit: Disconnecting device: {self.client.name} {self.client.address}")
             await self.client.disconnect()

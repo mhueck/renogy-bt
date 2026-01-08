@@ -45,17 +45,24 @@ class BaseClient:
 
     async def connect(self):
         self.ble_manager = BLEManager(mac_address=self.config['device']['mac_addr'], alias=self.config['device']['alias'], on_data=self.on_data_received, on_connect_fail=self.__on_connect_fail, notify_char_uuid=NOTIFY_CHAR_UUID, write_char_uuid=WRITE_CHAR_UUID, write_service_uuid=WRITE_SERVICE_UUID)
-        await self.ble_manager.discover()
 
-        if not self.ble_manager.device:
-            logging.error(f"Device not found: {self.config['device']['alias']} => {self.config['device']['mac_addr']}, please check the details provided.")
-            for dev in self.ble_manager.discovered_devices:
-                if dev.name != None and dev.name.startswith(tuple(ALIAS_PREFIXES)):
-                    logging.info(f"Possible device found! ====> {dev.name} > [{dev.address}]")
-            self.stop()
+        await self.ble_manager.connect()
+        if self.ble_manager.client and self.ble_manager.client.is_connected:
+            await self.read_section()
         else:
-            await self.ble_manager.connect()
-            if self.ble_manager.client and self.ble_manager.client.is_connected: await self.read_section()
+            logging.warning("Was not able to connect to MAC prior to discover - going long route.")
+
+            await self.ble_manager.discover()
+
+            if not self.ble_manager.device:
+                logging.error(f"Device not found: {self.config['device']['alias']} => {self.config['device']['mac_addr']}, please check the details provided.")
+                for dev in self.ble_manager.discovered_devices:
+                    if dev.name != None and dev.name.startswith(tuple(ALIAS_PREFIXES)):
+                        logging.info(f"Possible device found! ====> {dev.name} > [{dev.address}]")
+                self.stop()
+            else:
+                await self.ble_manager.connect()
+                if self.ble_manager.client and self.ble_manager.client.is_connected: await self.read_section()
 
     async def disconnect(self):
         await self.ble_manager.disconnect()
