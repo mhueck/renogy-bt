@@ -99,10 +99,10 @@ class EcoWorthyClient:
 
                 data = {}
                 data['voltage'] = bytes_to_int(payload, 0, 2, signed=False, scale=0.01)
-                data['current'] = bytes_to_int(payload, 2, 4, signed=True, scale=0.01)
-                data['capacity_remaining'] = bytes_to_int(payload, 4, 6, signed=False, scale=0.01)
-                data['capacity'] = bytes_to_int(payload, 4, 6, signed=False, scale=0.01)
-                data['temperature'] = bytes_to_int(payload, 23, 25, signed=False, scale=0.1) - 273.1
+                data['current'] = bytes_to_int(payload, 2, 2, signed=True, scale=0.01)
+                data['capacity_remaining'] = bytes_to_int(payload, 4, 2, signed=False, scale=0.01)
+                data['capacity'] = bytes_to_int(payload, 4, 2, signed=False, scale=0.01)
+                data['temperature'] = bytes_to_int(payload, 23, 2, signed=False, scale=0.1) - 273.1
                 temp_unit = self.config['data']['temperature_unit'].strip()
                 if temp_unit == "F":
                     data['temperature'] = format_temperature(data['temperature'])
@@ -117,7 +117,7 @@ class EcoWorthyClient:
                 data = {}
                 no_cells = int(data_length / 2)
                 for cell in range(1, no_cells+1):
-                    data[f'voltage_cell{cell}'] = bytes_to_int(payload, 2*(cell-1), 2*cell, signed=False, scale=0.001)
+                    data[f'voltage_cell{cell}'] = bytes_to_int(payload, 2*(cell-1), 2, signed=False, scale=0.001)
 
                 self.data.update(data)
                 self.fetched_cellv = True
