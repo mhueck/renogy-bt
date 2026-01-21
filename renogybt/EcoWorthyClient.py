@@ -33,47 +33,36 @@ class EcoWorthyClient:
         self.device_id = self.config['device'].getint('device_id')
         self.fetched_basics = False
         self.fetched_cellv = False
-        self.loop = None
         self.frame = None
+        self.read_timeout_task = None
         logging.info(f"Init {self.__class__.__name__}: {self.config['device']['alias']} => {self.config['device']['mac_addr']}")
 
     def start(self):
+        """Start the client using high-level asyncio APIs."""
         try:
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            self.future = self.loop.create_future()
-            
-            # Create the main task with timeout
-            main_task = self.loop.create_task(self._main_task())
-            
-            # Run with timeout to prevent indefinite hanging
-            try:
-                self.loop.run_until_complete(asyncio.wait_for(self.future, timeout=60))
-            except asyncio.TimeoutError:
-                logging.error("Application timeout after 60 seconds")
-                self.__on_error("Application timeout")
-            finally:
-                # Ensure cleanup
-                if not main_task.done():
-                    main_task.cancel()
-                    try:
-                        self.loop.run_until_complete(main_task)
-                    except asyncio.CancelledError:
-                        pass
-                self.loop.close()
-        except Exception as e:
-            self.__on_error(e)
+            # Use asyncio.run() for proper event loop management
+            asyncio.run(self._run_with_timeout())
         except KeyboardInterrupt:
             logging.info("KeyboardInterrupt received")
             self.__on_error("KeyboardInterrupt")
+        except Exception as e:
+            self.__on_error(e)
     
-    async def _main_task(self):
-        """Main async task that handles the connection and operation lifecycle."""
+    async def _run_with_timeout(self):
+        """Run the main task with timeout using high-level asyncio APIs."""
         try:
-            await self.connect()
+            # Use asyncio.wait_for for timeout handling
+            await asyncio.wait_for(self._main_task(), timeout=60.0)
+        except asyncio.TimeoutError:
+            logging.error("Application timeout after 60 seconds")
+            self.__on_error("Application timeout")
         except Exception as e:
             logging.error(f"Error in main task: {e}")
             self.__on_error(e)
+    
+    async def _main_task(self):
+        """Main async task that handles the connection and operation lifecycle."""
+        await self.connect()
 
     async def connect(self):
         try:
@@ -105,11 +94,13 @@ class EcoWorthyClient:
             self.__on_error(e)
 
     async def disconnect(self):
-        await self.ble_manager.disconnect()
-        self.future.set_result('DONE')
+        if self.ble_manager:
+            await self.ble_manager.disconnect()
 
     async def on_data_received(self, response):
-        if self.read_timeout and not self.read_timeout.cancelled(): self.read_timeout.cancel()
+        # Cancel timeout task if it exists
+        if hasattr(self, 'read_timeout_task') and not self.read_timeout_task.done():
+            self.read_timeout_task.cancel()
         frame_len = len(response)
         frame_header = response[0]
         frame_end = response[-1]
@@ -167,11 +158,21 @@ class EcoWorthyClient:
             await asyncio.sleep(0.5)
 
             if not self.fetched_basics:
-                self.read_timeout = self.loop.call_later(READ_TIMEOUT, self.on_read_timeout)
-                await self.ble_manager.characteristic_write_bytes(COMMAND_READ_BASIC)
+                # Start timeout task for read response
+                self.read_timeout_task = asyncio.create_task(
+                    self._check_timeout()
+                )
+                await self.ble_manager.characteristic_write_bytes(
+                    COMMAND_READ_BASIC
+                )
             elif not self.fetched_cellv and self.config["data"].get("read_cellv"):
-                self.read_timeout = self.loop.call_later(READ_TIMEOUT, self.on_read_timeout)
-                await self.ble_manager.characteristic_write_bytes(COMMAND_READ_CELLV)
+                # Start timeout task for read response  
+                self.read_timeout_task = asyncio.create_task(
+                    self._check_timeout()
+                )
+                await self.ble_manager.characteristic_write_bytes(
+                    COMMAND_READ_CELLV
+                )
             else:
                 # all done!
                 self.__safe_callback(self.on_data_callback, self.data)
@@ -184,54 +185,51 @@ class EcoWorthyClient:
             logging.error(f"Error in fetch_next: {e}")
             self.__on_error(e)
 
-    def on_read_timeout(self):
-        logging.error("on_read_timeout => Timed out! Please check your device_id!")
-        self.__on_error("Read timeout")
+    async def _check_timeout(self):
+        """Check for read timeout using high-level asyncio APIs."""
+        try:
+            await asyncio.sleep(READ_TIMEOUT)
+            logging.error("on_read_timeout => Timed out! Please check your device_id!")
+            self.__on_error("Read timeout")
+        except asyncio.CancelledError:
+            # Timeout was cancelled, which is normal
+            pass
 
     async def check_polling(self):
-        if self.config['data'].getboolean('enable_polling'): 
-            await asyncio.sleep(self.config['data'].getint('poll_interval'))
+        if self.config['data'].getboolean('enable_polling'):
+            poll_interval = self.config['data'].getint('poll_interval')
+            await asyncio.sleep(poll_interval)
             await self.fetch_next()
 
-    def __on_error(self, error = None):
+    def __on_error(self, error=None):
         logging.error(f"Exception occured: {error}")
         self.__safe_callback(self.on_error_callback, error)
-        self._ensure_future_resolved("ERROR")
+        # With asyncio.run(), we can simply raise an exception to terminate
+        if error and str(error) not in ["KeyboardInterrupt"]:
+            raise RuntimeError(f"Client error: {error}")
 
     def __on_connect_fail(self, error):
         logging.error(f"Connection failed: {error}")
         self.__safe_callback(self.on_error_callback, error)
-        self._ensure_future_resolved("CONNECTION_FAILED")
+        raise RuntimeError(f"Connection failed: {error}")
 
     def stop(self):
         """Stop the client and clean up resources."""
-        if self.read_timeout and not self.read_timeout.cancelled(): 
-            self.read_timeout.cancel()
+        # Cancel timeout task if it exists
+        if hasattr(self, 'read_timeout_task') and not self.read_timeout_task.done():
+            self.read_timeout_task.cancel()
         
-        if self.loop and not self.loop.is_closed():
-            # Schedule disconnect and ensure future is resolved
-            self.loop.create_task(self._cleanup_and_stop())
-        else:
-            # Fallback if loop is not available
-            self._ensure_future_resolved("STOPPED")
+        # Create cleanup task - let asyncio.run() handle the lifecycle
+        if self.ble_manager:
+            asyncio.create_task(self._cleanup())
 
-    async def _cleanup_and_stop(self):
-        """Cleanup resources and resolve future."""
+    async def _cleanup(self):
+        """Cleanup resources."""
         try:
             if self.ble_manager:
                 await self.ble_manager.disconnect()
         except Exception as e:
             logging.error(f"Error during cleanup: {e}")
-        finally:
-            self._ensure_future_resolved("STOPPED")
-
-    def _ensure_future_resolved(self, result="DONE"):
-        """Ensure the future is resolved to prevent hanging."""
-        if self.future and not self.future.done():
-            try:
-                self.future.set_result(result)
-            except Exception as e:
-                logging.error(f"Error resolving future: {e}")
 
     def __safe_callback(self, calback, param):
         if calback is not None:

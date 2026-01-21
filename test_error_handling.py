@@ -48,6 +48,9 @@ def test_connection_failure():
     
     try:
         client.start()
+    except RuntimeError as e:
+        # New behavior: RuntimeError is raised for connection failures
+        logging.info(f"RuntimeError (expected): {e}")
     except Exception as e:
         logging.info(f"Exception caught (expected): {e}")
     
@@ -56,10 +59,10 @@ def test_connection_failure():
     
     print(f"Test completed in {duration:.2f} seconds")
     
-    if duration > 70:  # Should complete within timeout + buffer
+    if duration > 20:  # Should fail quickly
         print("❌ FAIL: Test took too long, likely hung")
         return False
-    elif error_received or duration < 70:
+    elif error_received or duration < 20:
         print("✅ PASS: Error handling worked correctly")
         return True
     else:
@@ -88,8 +91,11 @@ def test_timeout_scenario():
         
         try:
             client.start()
+        except RuntimeError as e:
+            # New behavior: RuntimeError is raised for timeout
+            logging.info(f"RuntimeError (expected): {e}")
         except Exception as e:
-            logging.info(f"Timeout exception (expected): {e}")
+            logging.info(f"Other exception: {e}")
         
         end_time = time.time() 
         duration = end_time - start_time

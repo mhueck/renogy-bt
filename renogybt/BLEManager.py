@@ -4,6 +4,7 @@ import sys
 from bleak import BleakClient, BleakScanner, BLEDevice
 
 DISCOVERY_TIMEOUT = 5 # max wait time to complete the bluetooth scanning (seconds)
+CONNECTION_TIMEOUT = 10 # max wait time for BLE connection (seconds)
 
 class BLEManager:
     def __init__(self, mac_address, alias, on_data, on_connect_fail, write_service_uuid, notify_char_uuid, write_char_uuid):
@@ -36,9 +37,13 @@ class BLEManager:
         else:
             self.client = BleakClient(self.device)
         try:
-            await self.client.connect()
+            # Add timeout to connection attempt
+            await asyncio.wait_for(self.client.connect(), timeout=CONNECTION_TIMEOUT)
             logging.info(f"Client connection: {self.client.is_connected}")
-            if not self.client.is_connected: return logging.error("Unable to connect")
+            if not self.client.is_connected: 
+                logging.error("Unable to connect")
+                self.connect_fail_callback("Connection failed - client not connected")
+                return
 
             for service in self.client.services:
                 for characteristic in service.characteristics:
@@ -49,9 +54,12 @@ class BLEManager:
                         self.write_char_handle = characteristic.handle
                         logging.info(f"found write characteristic {characteristic.uuid}, service {service.uuid}")
 
-        except Exception:
-            logging.error(f"Error connecting to device")
-            self.connect_fail_callback(sys.exc_info())
+        except asyncio.TimeoutError:
+            logging.error(f"Connection timeout after {CONNECTION_TIMEOUT} seconds")
+            self.connect_fail_callback(f"Connection timeout after {CONNECTION_TIMEOUT} seconds")
+        except Exception as e:
+            logging.error(f"Error connecting to device: {e}")
+            self.connect_fail_callback(f"Connection error: {e}")
 
     async def notification_callback(self, characteristic, data: bytearray):
         logging.info("notification_callback")
@@ -64,7 +72,8 @@ class BLEManager:
             logging.info('characteristic_write_value succeeded')
             await asyncio.sleep(0.5)
         except Exception as e:
-            logging.info(f'characteristic_write_value failed {e}')
+            logging.error(f'characteristic_write_value failed {e}')
+            raise  # Re-raise exception to propagate error up
 
     async def characteristic_write_bytes(self, data):
         try:
@@ -73,7 +82,8 @@ class BLEManager:
             logging.info('characteristic_write_value succeeded')
             await asyncio.sleep(0.5)
         except Exception as e:
-            logging.info(f'characteristic_write_value failed {e}')
+            logging.error(f'characteristic_write_value failed {e}')
+            raise  # Re-raise exception to propagate error up
 
     async def disconnect(self):
         if self.client and self.client.is_connected:
