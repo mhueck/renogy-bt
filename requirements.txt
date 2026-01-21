@@ -3,3 +3,4 @@ configparser
 requests
 paho-mqtt
 influxdb-client
+influxdb3-python

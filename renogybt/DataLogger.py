@@ -65,3 +65,28 @@ class DataLogger:
         client = InfluxDBClient(url=url, token=token, org=org)
         write_api = client.write_api(write_options=SYNCHRONOUS)
         write_api.write(bucket=bucket, record=p)
+
+    def log_influxdb3(self, json_data):
+        from influxdb_client_3 import InfluxDBClient3, Point
+
+        logging.debug("influxdb3 logging")
+        host = self.config['influxdb3']['host']
+        token = self.config['influxdb3'].get('token', None)
+        database = self.config['influxdb3']['database']
+
+        p = Point(self.config['influxdb3'].get("measurement", "renogy"))
+        for key, value in json_data.items():
+            if value is None:
+                continue
+            if isinstance(value, str):
+                p = p.tag(key, value)
+            elif isinstance(value, numbers.Number):
+                p = p.field(key, value)
+            else:
+                logging.info(f"Ignoring key {key} with unsupported data type. Value: {value}")
+
+        logging.debug(f"Point: {p}")
+
+        with InfluxDBClient3(host=host, token=token, database=database) as client:
+            client.write(record=p)
+

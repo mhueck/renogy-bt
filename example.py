@@ -24,6 +24,8 @@ def on_data_received(client, data):
         data_logger.log_pvoutput(json_data=filtered_data)
     if config['influxdb2'].getboolean('enabled'):
         data_logger.log_influxdb2(json_data=filtered_data)
+    if config['influxdb3'].getboolean('enabled'):
+        data_logger.log_influxdb3(json_data=filtered_data)
     if not config['data'].getboolean('enable_polling'):
         client.stop()
 
