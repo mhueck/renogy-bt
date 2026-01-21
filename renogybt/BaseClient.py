@@ -33,36 +33,71 @@ class BaseClient:
 
     def start(self):
         try:
-            self.loop = asyncio.get_event_loop()
-            self.loop.create_task(self.connect())
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
             self.future = self.loop.create_future()
-            self.loop.run_until_complete(self.future)
+            
+            # Create the main task with timeout
+            main_task = self.loop.create_task(self._main_task())
+            
+            # Run with timeout to prevent indefinite hanging
+            try:
+                self.loop.run_until_complete(asyncio.wait_for(self.future, timeout=60))
+            except asyncio.TimeoutError:
+                logging.error("Application timeout after 60 seconds")
+                self.__on_error("Application timeout")
+            finally:
+                # Ensure cleanup
+                if not main_task.done():
+                    main_task.cancel()
+                    try:
+                        self.loop.run_until_complete(main_task)
+                    except asyncio.CancelledError:
+                        pass
+                self.loop.close()
         except Exception as e:
             self.__on_error(e)
         except KeyboardInterrupt:
-            self.loop = None
+            logging.info("KeyboardInterrupt received")
             self.__on_error("KeyboardInterrupt")
+    
+    async def _main_task(self):
+        """Main async task that handles the connection and operation lifecycle."""
+        try:
+            await self.connect()
+        except Exception as e:
+            logging.error(f"Error in main task: {e}")
+            self.__on_error(e)
 
     async def connect(self):
-        self.ble_manager = BLEManager(mac_address=self.config['device']['mac_addr'], alias=self.config['device']['alias'], on_data=self.on_data_received, on_connect_fail=self.__on_connect_fail, notify_char_uuid=NOTIFY_CHAR_UUID, write_char_uuid=WRITE_CHAR_UUID, write_service_uuid=WRITE_SERVICE_UUID)
+        try:
+            self.ble_manager = BLEManager(mac_address=self.config['device']['mac_addr'], alias=self.config['device']['alias'], on_data=self.on_data_received, on_connect_fail=self.__on_connect_fail, notify_char_uuid=NOTIFY_CHAR_UUID, write_char_uuid=WRITE_CHAR_UUID, write_service_uuid=WRITE_SERVICE_UUID)
 
-        await self.ble_manager.connect()
-        if self.ble_manager.client and self.ble_manager.client.is_connected:
-            await self.read_section()
-        else:
-            logging.warning("Was not able to connect to MAC prior to discover - going long route.")
-
-            await self.ble_manager.discover()
-
-            if not self.ble_manager.device:
-                logging.error(f"Device not found: {self.config['device']['alias']} => {self.config['device']['mac_addr']}, please check the details provided.")
-                for dev in self.ble_manager.discovered_devices:
-                    if dev.name != None and dev.name.startswith(tuple(ALIAS_PREFIXES)):
-                        logging.info(f"Possible device found! ====> {dev.name} > [{dev.address}]")
-                self.stop()
+            await self.ble_manager.connect()
+            if self.ble_manager.client and self.ble_manager.client.is_connected:
+                await self.read_section()
             else:
-                await self.ble_manager.connect()
-                if self.ble_manager.client and self.ble_manager.client.is_connected: await self.read_section()
+                logging.warning("Was not able to connect to MAC prior to discover - going long route.")
+
+                await self.ble_manager.discover()
+
+                if not self.ble_manager.device:
+                    logging.error(f"Device not found: {self.config['device']['alias']} => {self.config['device']['mac_addr']}, please check the details provided.")
+                    for dev in self.ble_manager.discovered_devices:
+                        if dev.name != None and dev.name.startswith(tuple(ALIAS_PREFIXES)):
+                            logging.info(f"Possible device found! ====> {dev.name} > [{dev.address}]")
+                    self.__on_error("Device not found after discovery")
+                    return
+                else:
+                    await self.ble_manager.connect()
+                    if self.ble_manager.client and self.ble_manager.client.is_connected: 
+                        await self.read_section()
+                    else:
+                        self.__on_error("Failed to connect after discovery")
+                        return
+        except Exception as e:
+            logging.error(f"Connection failed with exception: {e}")
+            self.__on_error(e)
 
     async def disconnect(self):
         await self.ble_manager.disconnect()
@@ -103,7 +138,7 @@ class BaseClient:
 
     def on_read_timeout(self):
         logging.error("on_read_timeout => Timed out! Please check your device_id!")
-        self.stop()
+        self.__on_error("Read timeout")
 
     async def check_polling(self):
         if self.config['data'].getboolean('enable_polling'): 
@@ -111,13 +146,19 @@ class BaseClient:
             await self.read_section()
 
     async def read_section(self):
-        index = self.section_index
-        if self.device_id == None or len(self.sections) == 0:
-            return logging.error("BaseClient cannot be used directly")
+        try:
+            index = self.section_index
+            if self.device_id == None or len(self.sections) == 0:
+                logging.error("BaseClient cannot be used directly")
+                self.__on_error("BaseClient cannot be used directly")
+                return
 
-        self.read_timeout = self.loop.call_later(READ_TIMEOUT, self.on_read_timeout)
-        request = self.create_generic_read_request(self.device_id, 3, self.sections[index]['register'], self.sections[index]['words']) 
-        await self.ble_manager.characteristic_write_value(request)
+            self.read_timeout = self.loop.call_later(READ_TIMEOUT, self.on_read_timeout)
+            request = self.create_generic_read_request(self.device_id, 3, self.sections[index]['register'], self.sections[index]['words']) 
+            await self.ble_manager.characteristic_write_value(request)
+        except Exception as e:
+            logging.error(f"Error in read_section: {e}")
+            self.__on_error(e)
 
     def create_generic_read_request(self, device_id, function, regAddr, readWrd):                             
         data = None                                
@@ -139,22 +180,42 @@ class BaseClient:
     def __on_error(self, error = None):
         logging.error(f"Exception occured: {error}")
         self.__safe_callback(self.on_error_callback, error)
-        self.stop()
+        self._ensure_future_resolved("ERROR")
 
     def __on_connect_fail(self, error):
         logging.error(f"Connection failed: {error}")
         self.__safe_callback(self.on_error_callback, error)
-        self.stop()
+        self._ensure_future_resolved("CONNECTION_FAILED")
 
     def stop(self):
-        if self.read_timeout and not self.read_timeout.cancelled(): self.read_timeout.cancel()
-        if self.loop is None:
-            self.loop = asyncio.get_event_loop()
-            self.loop.create_task(self.disconnect())
-            self.future = self.loop.create_future()
-            self.loop.run_until_complete(self.future)
+        """Stop the client and clean up resources."""
+        if self.read_timeout and not self.read_timeout.cancelled(): 
+            self.read_timeout.cancel()
+        
+        if self.loop and not self.loop.is_closed():
+            # Schedule disconnect and ensure future is resolved
+            self.loop.create_task(self._cleanup_and_stop())
         else:
-            self.loop.create_task(self.disconnect())
+            # Fallback if loop is not available
+            self._ensure_future_resolved("STOPPED")
+
+    async def _cleanup_and_stop(self):
+        """Cleanup resources and resolve future."""
+        try:
+            if self.ble_manager:
+                await self.ble_manager.disconnect()
+        except Exception as e:
+            logging.error(f"Error during cleanup: {e}")
+        finally:
+            self._ensure_future_resolved("STOPPED")
+
+    def _ensure_future_resolved(self, result="DONE"):
+        """Ensure the future is resolved to prevent hanging."""
+        if self.future and not self.future.done():
+            try:
+                self.future.set_result(result)
+            except Exception as e:
+                logging.error(f"Error resolving future: {e}")
 
     def __safe_callback(self, calback, param):
         if calback is not None:
