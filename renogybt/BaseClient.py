@@ -39,7 +39,7 @@ class BaseClient:
             # Use asyncio.run() for proper event loop management
             asyncio.run(self._run_with_timeout())
         except KeyboardInterrupt:
-            logging.info("KeyboardInterrupt received")
+            logging.warning("KeyboardInterrupt received")
             self.__on_error("KeyboardInterrupt")
         except Exception as e:
             self.__on_error(e)
@@ -114,10 +114,10 @@ class BaseClient:
                 self.sections[self.section_index]['parser'] != None and
                 self.sections[self.section_index]['words'] * 2 + 5 == len(response)):
                 # call the parser and update data
-                logging.info(f"on_data_received: read operation success")
+                logging.debug(f"on_data_received: read operation success")
                 self.__safe_parser(self.sections[self.section_index]['parser'], response)
             else:
-                logging.info(f"on_data_received: read operation failed: {response.hex()}")
+                logging.warning(f"on_data_received: read operation failed: {response.hex()}")
 
             if self.section_index >= len(self.sections) - 1: # last section, read complete
                 self.section_index = 0
@@ -132,7 +132,7 @@ class BaseClient:
             logging.warning("on_data_received: unknown operation={}".format(operation))
 
     def on_read_operation_complete(self):
-        logging.info("on_read_operation_complete")
+        logging.debug("on_read_operation_complete")
         self.data['__device'] = self.config['device']['alias']
         self.data['__client'] = self.__class__.__name__
         self.__safe_callback(self.on_data_callback, self.data)

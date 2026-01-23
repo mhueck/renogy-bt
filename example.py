@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO)
 
 config_file = sys.argv[1] if len(sys.argv) > 1 else 'config.ini'
 config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), config_file)
-config = configparser.ConfigParser(inline_comment_prefixes=('#'))
+config = configparser.ConfigParser(os.environ, inline_comment_prefixes=('#'))
 config.read(config_path)
 data_logger: DataLogger = DataLogger(config)
 

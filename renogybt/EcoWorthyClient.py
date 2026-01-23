@@ -45,7 +45,7 @@ class EcoWorthyClient:
             # Use asyncio.run() for proper event loop management
             asyncio.run(self._run_with_timeout())
         except KeyboardInterrupt:
-            logging.info("KeyboardInterrupt received")
+            logging.warning("KeyboardInterrupt received")
             self.__on_error("KeyboardInterrupt")
         except Exception as e:
             self.__on_error(e)
@@ -117,19 +117,19 @@ class EcoWorthyClient:
 
         if frame_header != FRAME_HEADER and self.frame:
             self.frame += response
-            logging.info(f"Adding {frame_len} bytes to existing frame.")
+            logging.debug(f"Adding {frame_len} bytes to existing frame.")
         elif frame_header == FRAME_HEADER:
             operation = bytes_to_int(response, 1, 1)
             status = bytes_to_int(response, 2, 1)
             data_length = bytes_to_int(response, 3, 1)
             self.frame = response
-            logging.info(f"Received new frame, frame header: {frame_header}, operation: {operation}, status: {status}, data length: {data_length}, frame length: {frame_len}")
+            logging.debug(f"Received new frame, frame header: {frame_header}, operation: {operation}, status: {status}, data length: {data_length}, frame length: {frame_len}")
 
         if frame_end == FRAME_END:
             operation = bytes_to_int(self.frame, 1, 1)
             data_length = bytes_to_int(self.frame, 3, 1)
             payload = self.frame[4:-3]
-            logging.info(f"Payload size is {len(payload)}, expecting {data_length}")
+            logging.debug(f"Payload size is {len(payload)}, expecting {data_length}")
             if operation == OPERATION_BASIC_INFO:
 
                 data = {}
@@ -161,7 +161,7 @@ class EcoWorthyClient:
                 logging.warning("on_data_received: unknown operation={}".format(operation))
             self.frame = None
         else:
-            logging.info("Still waiting for frame end.")
+            logging.debug("Still waiting for frame end.")
 
     async def fetch_next(self):
         try:
