@@ -29,6 +29,8 @@ class BaseClient:
         self.sections = []
         self.section_index = 0
         self.read_timeout_task = None
+        self._stop_event = None
+        self._running = False
         logging.info(f"Init {self.__class__.__name__}: {self.config['device']['alias']} => {self.config['device']['mac_addr']}")
 
     def start(self):
@@ -56,7 +58,15 @@ class BaseClient:
     
     async def _main_task(self):
         """Main async task that handles the connection and operation lifecycle."""
-        await self.connect()
+        self._running = True
+        self._stop_event = asyncio.Event()
+        try:
+            await self.connect()
+            # Keep the task running until explicitly stopped
+            await self._stop_event.wait()
+        finally:
+            await self._cleanup()
+            self._running = False
 
     async def connect(self):
         try:
@@ -196,13 +206,8 @@ class BaseClient:
 
     def stop(self):
         """Stop the client and clean up resources."""
-        # Cancel timeout task if it exists
-        if hasattr(self, 'read_timeout_task') and not self.read_timeout_task.done():
-            self.read_timeout_task.cancel()
-        
-        # Create cleanup task - let asyncio.run() handle the lifecycle
-        if self.ble_manager:
-            asyncio.create_task(self._cleanup())
+        if self._running and self._stop_event:
+            self._stop_event.set()
 
     async def _cleanup(self):
         """Cleanup resources."""
