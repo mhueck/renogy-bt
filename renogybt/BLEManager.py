@@ -3,8 +3,8 @@ import logging
 import sys
 from bleak import BleakClient, BleakScanner, BLEDevice
 
-DISCOVERY_TIMEOUT = 5 # max wait time to complete the bluetooth scanning (seconds)
-CONNECTION_TIMEOUT = 10 # max wait time for BLE connection (seconds)
+DISCOVERY_TIMEOUT = 10 # max wait time to complete the bluetooth scanning (seconds)
+CONNECTION_TIMEOUT = 25 # max wait time for BLE connection (seconds)
 
 class BLEManager:
     def __init__(self, mac_address, alias, on_data, on_connect_fail, write_service_uuid, notify_char_uuid, write_char_uuid):
@@ -20,30 +20,20 @@ class BLEManager:
         self.client: BleakClient = None
         self.discovered_devices = []
 
-    async def discover(self):
-        mac_address = self.mac_address.upper()
-        logging.info("Starting discovery...")
-        self.discovered_devices = await BleakScanner.discover(timeout=DISCOVERY_TIMEOUT)
-        logging.info("Devices found: %s", len(self.discovered_devices))
-
-        for dev in self.discovered_devices:
-            if dev.address != None and (dev.address.upper() == mac_address or (dev.name and dev.name.strip() == self.device_alias)):
-                logging.info(f"Found matching device {dev.name} => {dev.address}")
-                self.device = dev
-
     async def connect(self):
-        if not self.device:
-            self.client = BleakClient(self.mac_address)
-        else:
-            self.client = BleakClient(self.device)
         try:
-            # Add timeout to connection attempt
-            await asyncio.wait_for(self.client.connect(), timeout=CONNECTION_TIMEOUT)
-            logging.debug(f"Client connection: {self.client.is_connected}")
+            if not self.device:
+                logging.info(f"Connecting to: {self.mac_address}")
+                self.device = await BleakScanner.find_device_by_address(self.mac_address, timeout=CONNECTION_TIMEOUT)
+                if not self.device:
+                    raise Exception(f"Cannot find device {self.mac_address}")
+
+            logging.info(f"Found device {self.device}")
+            self.client = BleakClient(self.device)
+            await self.client.connect(timeout=CONNECTION_TIMEOUT)
+            logging.info(f"Client connection: {self.client.is_connected}")
             if not self.client.is_connected: 
-                logging.error("Unable to connect")
-                self.connect_fail_callback("Connection failed - client not connected")
-                return
+                raise Exception(f"Cannot connect to device {self.device}")
 
             for service in self.client.services:
                 for characteristic in service.characteristics:
@@ -56,10 +46,10 @@ class BLEManager:
 
         except asyncio.TimeoutError:
             logging.error(f"Connection timeout after {CONNECTION_TIMEOUT} seconds")
-            self.connect_fail_callback(f"Connection timeout after {CONNECTION_TIMEOUT} seconds")
+            raise
         except Exception as e:
             logging.error(f"Error connecting to device: {e}")
-            self.connect_fail_callback(f"Connection error: {e}")
+            raise
 
     async def notification_callback(self, characteristic, data: bytearray):
         logging.debug("notification_callback")
@@ -87,5 +77,10 @@ class BLEManager:
 
     async def disconnect(self):
         if self.client and self.client.is_connected:
-            logging.debug(f"Exit: Disconnecting device: {self.client.name} {self.client.address}")
-            await self.client.disconnect()
+            try:
+                logging.debug(f"Exit: Disconnecting device: {self.client.name} {self.client.address}")
+                await self.client.stop_notify(self.notify_char_uuid)
+                await self.client.disconnect()
+            except Exception as e:
+                logging.warning(f'Error during disconnect {e}')
+            

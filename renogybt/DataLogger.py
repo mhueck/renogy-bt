@@ -66,7 +66,7 @@ class DataLogger:
         write_api = client.write_api(write_options=SYNCHRONOUS)
         write_api.write(bucket=bucket, record=p)
 
-    def log_influxdb3(self, json_data):
+    def log_influxdb3(self, measurement, json_data):
         from influxdb_client_3 import InfluxDBClient3, Point
 
         logging.debug("influxdb3 logging")
@@ -74,7 +74,7 @@ class DataLogger:
         token = self.config['influxdb3'].get('token', None)
         database = self.config['influxdb3']['database']
 
-        p = Point(self.config['influxdb3'].get("measurement", "renogy"))
+        p = Point(measurement)
         for key, value in json_data.items():
             if value is None:
                 continue

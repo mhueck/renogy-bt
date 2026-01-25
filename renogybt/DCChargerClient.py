@@ -33,11 +33,11 @@ class DCChargerClient(BaseClient):
         self.on_error_callback = on_error_callback
         self.data = {}
         self.sections = [
-            {'register': 12, 'words': 8, 'parser': self.parse_device_info},
-            {'register': 26, 'words': 1, 'parser': self.parse_device_address},
+            # {'register': 12, 'words': 8, 'parser': self.parse_device_info},
+            # {'register': 26, 'words': 1, 'parser': self.parse_device_address},
             {'register': 256, 'words': 30, 'parser': self.parse_charging_info},
-            {'register': 288, 'words': 3, 'parser': self.parse_state},
-            {'register': 57348, 'words': 1, 'parser': self.parse_battery_type}
+            # {'register': 288, 'words': 3, 'parser': self.parse_state},
+            # {'register': 57348, 'words': 1, 'parser': self.parse_battery_type}
         ]
 
     def parse_device_info(self, bs):
@@ -53,7 +53,7 @@ class DCChargerClient(BaseClient):
 
     def parse_charging_info(self, bs):
         data = {}
-        temp_unit = self.config['data']['temperature_unit']
+        temp_unit = "C"
         data['function'] = FUNCTION.get(bytes_to_int(bs, 1, 1))
         data['battery_percentage'] = bytes_to_int(bs, 3, 2)
         data['battery_voltage'] = bytes_to_int(bs, 5, 2, scale = 0.1)

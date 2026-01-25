@@ -2,6 +2,8 @@ import logging
 import configparser
 import os
 import sys
+import asyncio
+import time
 from renogybt import EcoWorthyClient, DCChargerClient, InverterClient, RoverClient, RoverHistoryClient, BatteryClient, DataLogger, Utils
 
 logging.basicConfig(level=logging.INFO)
@@ -20,31 +22,59 @@ def on_data_received(client, data):
         data_logger.log_remote(json_data=filtered_data)
     if config['mqtt'].getboolean('enabled'):
         data_logger.log_mqtt(json_data=filtered_data)
-    if config['pvoutput'].getboolean('enabled') and config['device']['type'] == 'RNG_CTRL':
-        data_logger.log_pvoutput(json_data=filtered_data)
     if config['influxdb2'].getboolean('enabled'):
         data_logger.log_influxdb2(json_data=filtered_data)
     if config['influxdb3'].getboolean('enabled'):
-        data_logger.log_influxdb3(json_data=filtered_data)
-    if not config['data'].getboolean('enable_polling'):
-        client.stop()
+        data_logger.log_influxdb3(client.section['type'], json_data=filtered_data)
 
 # error callback
 def on_error(client, error):
     logging.error(f"on_error: {error}")
 
-# start client
-if config['device']['type'] == 'RNG_CTRL':
-    RoverClient(config, on_data_received, on_error).start()
-elif config['device']['type'] == 'RNG_CTRL_HIST':
-    RoverHistoryClient(config, on_data_received, on_error).start()
-elif config['device']['type'] == 'RNG_BATT':
-    BatteryClient(config, on_data_received, on_error).start()
-elif config['device']['type'] == 'RNG_INVT':
-    InverterClient(config, on_data_received, on_error).start()
-elif config['device']['type'] == 'RNG_DCC':
-    DCChargerClient(config, on_data_received, on_error).start()
-elif config['device']['type'] == 'EW_BAT':
-    EcoWorthyClient(config, on_data_received, on_error).start()
-else:
-    logging.error("unknown device type")
+async def main(config):
+    devices = []
+    for i in range(1, 6):
+        if config.has_section(f"device{i}"):
+            sec = config[f"device{i}"]
+        else:
+            break
+        # start client
+        if sec['type'] == 'RNG_CTRL':
+            devices.append(RoverClient(sec, on_data_received, on_error))
+        elif sec['type'] == 'RNG_CTRL_HIST':
+            devices.append(RoverHistoryClient(sec, on_data_received, on_error))
+        elif sec['type'] == 'RNG_BATT':
+            devices.append(BatteryClient(sec, on_data_received, on_error))
+        elif sec['type'] == 'RNG_INVT':
+            devices.append(InverterClient(sec, on_data_received, on_error))
+        elif sec['type'] == 'RNG_DCC':
+            devices.append(DCChargerClient(sec, on_data_received, on_error))
+        elif sec['type'] == 'EW_BAT':
+            devices.append(EcoWorthyClient(sec, on_data_received, on_error))
+        else:
+            logging.error("unknown device type")
+
+    try:
+        for device in devices:
+            await asyncio.wait_for(device.connect(), 35.0)
+
+        if config['data'].getboolean('enable_polling'):
+            interval = config['data'].getint('poll_interval')
+            while True:
+                start_time_ms = int(time.time() * 1000)
+                for device in devices:
+                    await asyncio.wait_for(device.read(), 30.0)
+                current_time_ms = int(time.time() * 1000)
+                wait_time_ms = max(1000, interval * 1000 + start_time_ms - current_time_ms)
+                logging.info(f"Waiting for {wait_time_ms/1000} s")
+                await asyncio.sleep(wait_time_ms/1000.0)
+        else:
+            for device in devices:
+                await asyncio.wait_for(device.read(), 30.0)
+
+    finally:
+        for device in devices:
+            await asyncio.wait_for(device.disconnect(), 5.0)
+
+if __name__ == "__main__":
+    asyncio.run(main(config)) # Launch the event loop and execute main()
