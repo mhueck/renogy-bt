@@ -1,5 +1,6 @@
 import logging
-from .BaseClient import BaseClient
+
+from renogybt.RenogyClient import RenogyClient
 from .Utils import bytes_to_int, parse_temperature
 
 FUNCTION = {
@@ -26,12 +27,10 @@ BATTERY_TYPE = {
     5: 'custom'
 }
 
-class DCChargerClient(BaseClient):
+
+class DCChargerClient(RenogyClient):
     def __init__(self, config, on_data_callback=None, on_error_callback=None):
-        super().__init__(config)
-        self.on_data_callback = on_data_callback
-        self.on_error_callback = on_error_callback
-        self.data = {}
+        super().__init__(config, on_data_callback=on_data_callback, on_error_callback=on_error_callback)
         self.sections = [
             # {'register': 12, 'words': 8, 'parser': self.parse_device_info},
             # {'register': 26, 'words': 1, 'parser': self.parse_device_address},

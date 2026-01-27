@@ -4,7 +4,7 @@ import os
 import sys
 import asyncio
 import time
-from renogybt import EcoWorthyClient, DCChargerClient, InverterClient, RoverClient, RoverHistoryClient, BatteryClient, DataLogger, Utils
+from renogybt import EcoWorthyClient, DCChargerClient, DataLogger, Utils
 
 logging.basicConfig(level=logging.INFO)
 
@@ -39,15 +39,7 @@ async def main(config):
         else:
             break
         # start client
-        if sec['type'] == 'RNG_CTRL':
-            devices.append(RoverClient(sec, on_data_received, on_error))
-        elif sec['type'] == 'RNG_CTRL_HIST':
-            devices.append(RoverHistoryClient(sec, on_data_received, on_error))
-        elif sec['type'] == 'RNG_BATT':
-            devices.append(BatteryClient(sec, on_data_received, on_error))
-        elif sec['type'] == 'RNG_INVT':
-            devices.append(InverterClient(sec, on_data_received, on_error))
-        elif sec['type'] == 'RNG_DCC':
+        if sec['type'] == 'RNG_DCC':
             devices.append(DCChargerClient(sec, on_data_received, on_error))
         elif sec['type'] == 'EW_BAT':
             devices.append(EcoWorthyClient(sec, on_data_received, on_error))
