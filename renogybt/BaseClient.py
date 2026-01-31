@@ -63,7 +63,7 @@ class BaseClient(ABC):
 
     async def read(self):
         self.read_done_event = asyncio.Event()
-        await self.read_next()
+        await self.start_read()
         await asyncio.wait_for(self.read_done_event.wait(), READ_TIMEOUT)
         if self.read_error:
             raise Exception("Some read error occurred")
@@ -78,7 +78,7 @@ class BaseClient(ABC):
             self.read_done_event.set()
 
     def on_read_failed(self):
-        self.__safe_callback(self.on_error_callback)
+        self.__safe_callback(self.on_error_callback, "Read failed")
         self.data = {}
         self.read_error = True
         if self.read_done_event:

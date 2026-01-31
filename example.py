@@ -4,7 +4,7 @@ import os
 import sys
 import asyncio
 import time
-from renogybt import EcoWorthyClient, DCChargerClient, DataLogger, Utils
+from renogybt import EcoWorthyClient, DCChargerClient, DataLogger, Utils, BleEspClient
 
 logging.basicConfig(level=logging.INFO)
 
@@ -43,6 +43,8 @@ async def main(config):
             devices.append(DCChargerClient(sec, on_data_received, on_error))
         elif sec['type'] == 'EW_BAT':
             devices.append(EcoWorthyClient(sec, on_data_received, on_error))
+        elif sec['type'] == 'BLE_ESP':
+            devices.append(BleEspClient(sec, on_data_received, on_error))
         else:
             logging.error("unknown device type")
 

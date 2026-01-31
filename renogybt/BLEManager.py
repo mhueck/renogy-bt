@@ -60,7 +60,7 @@ class BLEManager:
             logging.debug(f'writing to {self.write_char_uuid} {data}')
             await self.client.write_gatt_char(self.write_char_handle, bytearray(data), response=False)
             logging.debug('characteristic_write_value succeeded')
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
         except Exception as e:
             logging.error(f'characteristic_write_value failed {e}')
             raise  # Re-raise exception to propagate error up
@@ -70,7 +70,7 @@ class BLEManager:
             logging.debug(f'writing to {self.write_char_uuid} {data}')
             await self.client.write_gatt_char(self.write_char_handle, data, response=False)
             logging.debug('characteristic_write_value succeeded')
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
         except Exception as e:
             logging.error(f'characteristic_write_value failed {e}')
             raise  # Re-raise exception to propagate error up
