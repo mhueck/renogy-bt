@@ -75,7 +75,6 @@ class RenogyClient(BaseClient):
             index = self.section_index
             if self.device_id is None or len(self.sections) == 0:
                 logging.error("BaseClient cannot be used directly")
-                self.__on_error("BaseClient cannot be used directly")
                 return
             request = self.create_generic_read_request(
                 self.device_id, 3, 

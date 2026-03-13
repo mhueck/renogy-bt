@@ -14,16 +14,8 @@ config = configparser.ConfigParser(os.environ, inline_comment_prefixes=('#'))
 config.read(config_path)
 data_logger: DataLogger = DataLogger(config)
 
-engine_running = False
-
 # the callback func when you receive data
 def on_data_received(client, data):
-    global engine_running
-    if "alternator_voltage" in data:
-        if data["alternator_voltage"] > 13.5:
-            engine_running = True
-        else:
-            engine_running = False
     filtered_data = Utils.filter_fields(data, config['data']['fields'])
     logging.info(f" => {filtered_data}")
     if config['remote_logging'].getboolean('enabled'):
@@ -40,25 +32,27 @@ def on_error(client, error):
     logging.error(f"on_error: {error}")
 
 async def main(config):
-    global engine_running
     devices = {}
+    gps_device = None
     for i in range(1, 6):
         if config.has_section(f"device{i}"):
             sec = config[f"device{i}"]
         else:
             break
-        devices[f"device{i}"] = {"config": sec}
         # start client
         if sec['type'] == 'RNG_DCC':
+            devices[f"device{i}"] = {"config": sec}
             devices[f"device{i}"]["client"] = DCChargerClient(sec, on_data_received, on_error)
         elif sec['type'] == 'EW_BAT':
+            devices[f"device{i}"] = {"config": sec}
             devices[f"device{i}"]["client"] = EcoWorthyClient(sec, on_data_received, on_error)
         elif sec['type'] == 'BLE_ESP':
-            devices[f"device{i}"]["client"] = BleEspClient(sec, on_data_received, on_error)
+            gps_device = BleEspClient(sec, on_data_received, on_error)
         else:
             logging.error("unknown device type")
 
     try:
+        # regular devices are connected directly, they are expected to always be present.
         for device in devices:
             await asyncio.wait_for(devices[device]["client"].connect(), 35.0)
 
@@ -67,13 +61,15 @@ async def main(config):
             poll_counter = 0
             while True:
                 start_time_ms = int(time.time() * 1000)
+                # The GPS device is only available when it is powered on, so we try to connect and read it every time. If it is not available, we just log the error and continue with the other devices.
+                try:
+                    await asyncio.wait_for(gps_device.connect(), 20.0)
+                    await asyncio.wait_for(gps_device.read(), 10.0)
+                except Exception as e:
+                    pass
+
                 for device in devices:
                     poll_modulo = devices[device]["config"].getint("poll_modulo", 1)
-                    if devices[device]["config"]['type'] == 'BLE_ESP':
-                        if engine_running:
-                            poll_modulo = 1
-                        else:
-                            poll_modulo = 30
                     if (poll_counter % poll_modulo) == 0:
                         await asyncio.wait_for(devices[device]["client"].read(), 30.0)
                 current_time_ms = int(time.time() * 1000)
