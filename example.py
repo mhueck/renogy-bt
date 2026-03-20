@@ -57,26 +57,21 @@ async def main(config):
             await asyncio.wait_for(devices[device]["client"].connect(), 35.0)
 
         if config['data'].getboolean('enable_polling'):
-            interval = config['data'].getint('poll_interval')
-            poll_counter = 0
+            last_read = 0
             while True:
-                start_time_ms = int(time.time() * 1000)
                 # The GPS device is only available when it is powered on, so we try to connect and read it every time. If it is not available, we just log the error and continue with the other devices.
                 try:
-                    await asyncio.wait_for(gps_device.connect(), 20.0)
+                    await asyncio.wait_for(gps_device.connect(), 18.0)
                     await asyncio.wait_for(gps_device.read(), 10.0)
                 except Exception as e:
                     pass
 
-                for device in devices:
-                    poll_modulo = devices[device]["config"].getint("poll_modulo", 1)
-                    if (poll_counter % poll_modulo) == 0:
-                        await asyncio.wait_for(devices[device]["client"].read(), 30.0)
-                current_time_ms = int(time.time() * 1000)
-                wait_time_ms = max(1000, interval * 1000 + start_time_ms - current_time_ms)
-                logging.info(f"Waiting for {wait_time_ms/1000} s")
-                await asyncio.sleep(wait_time_ms/1000.0)
-                poll_counter += 1
+                time_ms = int(time.time() * 1000)
+                if time_ms - last_read > 57 * 1000:
+                    for device in devices:
+                        await asyncio.wait_for(devices[device]["client"].read(), 10.0)
+                    last_read = time_ms
+                await asyncio.sleep(12.0)
         else:
             for device in devices:
                 await asyncio.wait_for(devices[device]["client"].read(), 30.0)
