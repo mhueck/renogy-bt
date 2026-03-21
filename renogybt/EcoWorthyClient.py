@@ -44,7 +44,9 @@ class EcoWorthyClient(BaseClient):
     async def start_read(self):
         self.section_index = 0
         self.data = {}
-        await self.read_section()
+        self.fetched_basics = False
+        self.fetched_cellv = False
+        await self.fetch_next()
 
     async def on_data_received(self, response):
         try:
