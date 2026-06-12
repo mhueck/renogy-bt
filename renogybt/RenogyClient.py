@@ -1,113 +1,139 @@
 import asyncio
-import configparser
 import logging
 import traceback
 
-from renogybt.BaseClient import BaseClient
+from .BLEManager import BLEManager
 from .Utils import bytes_to_int, crc16_modbus, int_to_bytes
 
-# Base class that works with all Renogy family devices
-# Should be extended by each client with its own parsers and section definitions
-# Section example: {'register': 5000, 'words': 8, 'parser': self.parser_func}
-
-ALIAS_PREFIXES = ['BT-TH', 'RNGRBP', 'BTRIC']
 WRITE_SERVICE_UUID = "0000ffd0-0000-1000-8000-00805f9b34fb"
 NOTIFY_CHAR_UUID = "0000fff1-0000-1000-8000-00805f9b34fb"
 WRITE_CHAR_UUID = "0000ffd1-0000-1000-8000-00805f9b34fb"
+READ_TIMEOUT = 15
 READ_SUCCESS = 3
 READ_ERROR = 131
 
 
-class RenogyClient(BaseClient):
-    def __init__(self, config, on_data_callback=None, on_error_callback=None):
-        super().__init__(config, on_data_callback=on_data_callback, on_error_callback=on_error_callback)
-        self.device_id = self.config.getint('device_id')
+class RenogyClient:
+    def __init__(self, config):
+        self.config = config
+        self.device_id = config.getint('device_id')
+        self.ble_manager = None
+        self.data = {}
         self.sections = []
         self.section_index = 0
-        logging.info(f"Init {self.__class__.__name__}: {self.config['alias']} => {self.config['mac_addr']}")    
+        self.read_done_event = None
+        self.read_error = False
+        self.connected = False
+        self._lock = asyncio.Lock()
+        logging.info(f"Init {self.__class__.__name__}: {self.config['alias']} => {self.config['mac_addr']}")
 
-    @property
-    def write_service_uuid(self):
-        return WRITE_SERVICE_UUID
+    async def connect(self):
+        async with self._lock:
+            if self.ble_manager and getattr(self.ble_manager, 'client', None) and getattr(self.ble_manager.client, 'is_connected', False):
+                self.connected = True
+                return
+            self.connected = False
+            self.ble_manager = BLEManager(
+                mac_address=self.config['mac_addr'], alias=self.config['alias'],
+                on_data=self._on_data_received,
+                notify_char_uuid=NOTIFY_CHAR_UUID, write_char_uuid=WRITE_CHAR_UUID,
+                write_service_uuid=WRITE_SERVICE_UUID
+            )
+            await self.ble_manager.connect()
+            if self.ble_manager.client and getattr(self.ble_manager.client, 'is_connected', False):
+                self.connected = True
+                return
+            raise Exception("Connect error")
 
-    @property
-    def notify_char_uuid(self):
-        return NOTIFY_CHAR_UUID
+    async def read(self):
+        self.read_done_event = asyncio.Event()
+        async with self._lock:
+            self.section_index = 0
+            self.data = {}
+            await self._read_section()
+            await asyncio.wait_for(self.read_done_event.wait(), READ_TIMEOUT)
+            if self.read_error:
+                await self.disconnect()
+                raise Exception("Read error")
+            return self.data
 
-    @property
-    def write_char_uuid(self):
-        return WRITE_CHAR_UUID
+    async def disconnect(self):
+        async with self._lock:
+            if self.ble_manager:
+                await self.ble_manager.disconnect()
+                self.ble_manager = None
+            self.connected = False
 
-    async def start_read(self):
-        self.section_index = 0
-        self.data = {}
-        await self.read_section()
-
-    async def on_data_received(self, response):
+    async def _on_data_received(self, response):
         try:
             operation = bytes_to_int(response, 1, 1)
 
             if operation == READ_SUCCESS or operation == READ_ERROR:
                 if (operation == READ_SUCCESS and
                     self.section_index < len(self.sections) and
-                    self.sections[self.section_index]['parser'] != None and
+                    self.sections[self.section_index]['parser'] is not None and
                     self.sections[self.section_index]['words'] * 2 + 5 == len(response)):
-                    # call the parser and update data
-                    logging.debug(f"on_data_received: read operation success")
-                    self.__safe_parser(self.sections[self.section_index]['parser'], response)
+                    logging.debug("on_data_received: read operation success")
+                    self._safe_parser(self.sections[self.section_index]['parser'], response)
                 else:
                     logging.warning(f"on_data_received: read operation failed: {response.hex()}")
 
-                if self.section_index >= len(self.sections) - 1: # last section, read complete
-                    self.on_read_complete()
+                if self.section_index >= len(self.sections) - 1:
+                    self._on_read_complete()
                 else:
                     self.section_index += 1
                     await asyncio.sleep(0.5)
-                    await self.read_section()
+                    await self._read_section()
             else:
-                logging.warning("on_data_received: unknown operation={}".format(operation))
+                logging.warning(f"on_data_received: unknown operation={operation}")
         except Exception as e:
             logging.error(f"Error in on_data_received: {e}")
-            self.on_read_failed()
+            self._on_read_failed()
 
-    async def read_section(self):
+    async def _read_section(self):
         try:
             index = self.section_index
-            if self.device_id is None or len(self.sections) == 0:
-                logging.error("BaseClient cannot be used directly")
-                return
-            request = self.create_generic_read_request(
-                self.device_id, 3, 
-                self.sections[index]['register'], 
+            request = self._create_read_request(
+                self.device_id, 3,
+                self.sections[index]['register'],
                 self.sections[index]['words']
             )
             await self.ble_manager.characteristic_write_value(request)
         except Exception as e:
-            logging.error(f"Error in read_section: {e}")
-            self.on_read_failed()
+            logging.error(f"Error in _read_section: {e}")
+            self._on_read_failed()
 
-    def create_generic_read_request(self, device_id, function, regAddr, readWrd):                             
-        data = None                                
-        if regAddr != None and readWrd != None:
-            data = []
-            data.append(device_id)
-            data.append(function)
-            data.append(int_to_bytes(regAddr, 0))
-            data.append(int_to_bytes(regAddr, 1))
-            data.append(int_to_bytes(readWrd, 0))
-            data.append(int_to_bytes(readWrd, 1))
+    def _on_read_complete(self):
+        self.data['__device'] = self.config['alias']
+        self.data['__client'] = self.__class__.__name__
+        self.data['__name'] = self.config['name']
+        self.read_error = False
+        if self.read_done_event:
+            self.read_done_event.set()
 
-            crc = crc16_modbus(bytes(data))
-            data.append(crc[0])
-            data.append(crc[1])
-            logging.debug("{} {} => {}".format("create_request_payload", regAddr, data))
+    def _on_read_failed(self):
+        self.data = {}
+        self.read_error = True
+        if self.read_done_event:
+            self.read_done_event.set()
+
+    def _create_read_request(self, device_id, function, regAddr, readWrd):
+        data = []
+        data.append(device_id)
+        data.append(function)
+        data.append(int_to_bytes(regAddr, 0))
+        data.append(int_to_bytes(regAddr, 1))
+        data.append(int_to_bytes(readWrd, 0))
+        data.append(int_to_bytes(readWrd, 1))
+        crc = crc16_modbus(bytes(data))
+        data.append(crc[0])
+        data.append(crc[1])
+        logging.debug(f"_create_read_request {regAddr} => {data}")
         return data
 
-
-    def __safe_parser(self, parser, param):
-        if parser is not None:
-            try:
-                parser(param)
-            except Exception as e:
-                logging.error(f"exception in parser! {e}")
-                traceback.print_exc()
+    def _safe_parser(self, parser, param):
+        try:
+            parser(param)
+        except Exception as e:
+            logging.error(f"Exception in parser: {e}")
+            traceback.print_exc()

@@ -7,11 +7,10 @@ DISCOVERY_TIMEOUT = 10 # max wait time to complete the bluetooth scanning (secon
 CONNECTION_TIMEOUT = 25 # max wait time for BLE connection (seconds)
 
 class BLEManager:
-    def __init__(self, mac_address, alias, on_data, on_connect_fail, write_service_uuid, notify_char_uuid, write_char_uuid):
+    def __init__(self, mac_address, alias, on_data, write_service_uuid, notify_char_uuid, write_char_uuid):
         self.mac_address = mac_address
         self.device_alias = alias
         self.data_callback = on_data
-        self.connect_fail_callback = on_connect_fail
         self.write_service_uuid = write_service_uuid
         self.notify_char_uuid = notify_char_uuid
         self.write_char_uuid = write_char_uuid
