@@ -5,7 +5,7 @@ import os
 import sys
 import asyncio
 import time
-from renogybt import EcoWorthyClient, DCChargerClient, BleEspClient, filter_fields
+from renogybt import EcoWorthyClient, DCChargerClient, BleEspClient, BLEServer, filter_fields
 
 logging.basicConfig(level=logging.INFO)
 
@@ -46,8 +46,10 @@ async def main():
     gps = BleEspClient(config['gps'])
     charger = DCChargerClient(config['charger'])
     battery = EcoWorthyClient(config['battery'])
+    ble_server = BLEServer(name=config.get('ble_server', 'name', fallback='SolarBLE'))
 
     try:
+        await ble_server.start()
         await asyncio.wait_for(charger.connect(), 35.0)
         await asyncio.wait_for(battery.connect(), 35.0)
 
@@ -63,15 +65,46 @@ async def main():
 
                 time_ms = int(time.time() * 1000)
                 if time_ms - last_read > 57 * 1000:
-                    process_data(await asyncio.wait_for(charger.read(), 10.0))
-                    process_data(await asyncio.wait_for(battery.read(), 10.0))
+                    charger_data = await asyncio.wait_for(charger.read(), 10.0)
+                    battery_data = await asyncio.wait_for(battery.read(), 10.0)
+                    process_data(charger_data)
+                    process_data(battery_data)
+                    if ble_server.running:
+                        ble_server.update_battery(
+                            percentage=battery_data.get('percentage', 0),
+                            power=battery_data.get('power', 0),
+                            voltage=battery_data.get('voltage', 0),
+                            temperature=battery_data.get('temperature', 0),
+                        )
+                        ble_server.update_charger(
+                            pv_voltage=charger_data.get('pv_voltage', 0),
+                            pv_current=charger_data.get('pv_current', 0),
+                            alternator_voltage=charger_data.get('alternator_voltage', 0),
+                            alternator_current=charger_data.get('alternator_current', 0),
+                        )
                     last_read = time_ms
                 await asyncio.sleep(12.0)
         else:
-            process_data(await asyncio.wait_for(charger.read(), 30.0))
-            process_data(await asyncio.wait_for(battery.read(), 30.0))
+            charger_data = await asyncio.wait_for(charger.read(), 30.0)
+            battery_data = await asyncio.wait_for(battery.read(), 30.0)
+            process_data(charger_data)
+            process_data(battery_data)
+            if ble_server.running:
+                ble_server.update_battery(
+                    percentage=battery_data.get('percentage', 0),
+                    power=battery_data.get('power', 0),
+                    voltage=battery_data.get('voltage', 0),
+                    temperature=battery_data.get('temperature', 0),
+                )
+                ble_server.update_charger(
+                    pv_voltage=charger_data.get('pv_voltage', 0),
+                    pv_current=charger_data.get('pv_current', 0),
+                    alternator_voltage=charger_data.get('alternator_voltage', 0),
+                    alternator_current=charger_data.get('alternator_current', 0),
+                )
 
     finally:
+        await ble_server.stop()
         await asyncio.wait_for(charger.disconnect(), 5.0)
         await asyncio.wait_for(battery.disconnect(), 5.0)
 
