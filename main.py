@@ -71,13 +71,25 @@ async def main():
     gps = BleEspClient(config['gps'])
     charger = DCChargerClient(config['charger'])
     battery = EcoWorthyClient(config['battery'])
-    ble_server = BLEServer(name=config.get('ble_server', 'name', fallback='SolarBLE'))
+    ble_server = BLEServer(
+        name=config.get('ble_server', 'name', fallback='SolarBLE'),
+        adapter=config.get('ble_server', 'adapter', fallback=None)
+    )
 
     gps_coords = {'lat': None, 'lon': None}
     weather_task = None
 
+    enable_ble = config.getboolean('ble_server', 'enabled', fallback=True)
+
     try:
-        await ble_server.start()
+        if enable_ble:
+            try:
+                await ble_server.start()
+            except Exception as e:
+                logging.error(f"Failed to start BLE server: {e}. Continuing without BLE advertising.")
+        else:
+            logging.info("BLE server is disabled in config.")
+
         await asyncio.wait_for(charger.connect(), 35.0)
         await asyncio.wait_for(battery.connect(), 35.0)
 

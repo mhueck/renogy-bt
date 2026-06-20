@@ -15,8 +15,9 @@ HOUR_SECONDS = 3600
 
 
 class BLEServer:
-    def __init__(self, name="SolarBLE"):
+    def __init__(self, name="SolarBLE", adapter=None):
         self.name = name
+        self.adapter = adapter
         self.server = None
         self.running = False
         self.pct_history = deque(maxlen=HISTORY_SIZE)
@@ -26,7 +27,7 @@ class BLEServer:
 
 
     async def start(self):
-        self.server = BlessServer(name=self.name)
+        self.server = BlessServer(name=self.name, adapter=self.adapter)
         self.server.on_read = self._on_read
 
         await self.server.add_new_service(SERVICE_UUID)
@@ -49,7 +50,7 @@ class BLEServer:
         logging.info(f"BLE server '{self.name}' started")
 
     async def stop(self):
-        if self.server:
+        if self.server and self.running:
             await self.server.stop()
             self.running = False
             logging.info("BLE server stopped")

@@ -21,8 +21,8 @@ CHARGING_STATE = {
 
 
 class DCChargerClient(RenogyClient):
-    def __init__(self, config, on_data_callback=None, on_error_callback=None):
-        super().__init__(config, on_data_callback=on_data_callback, on_error_callback=on_error_callback)
+    def __init__(self, config):
+        super().__init__(config)
         self.sections = [
             {'register': 256, 'words': 30, 'parser': self.parse_charging_info},
         ]
