@@ -22,7 +22,8 @@ class BLEServer:
         self.pct_history = deque(maxlen=HISTORY_SIZE)
         self.battery_data = bytearray(9)
         self.charger_data = bytearray(4)
-        self.weather_data = bytearray(0)
+        self.weather_data = bytearray(28)
+
 
     async def start(self):
         self.server = BlessServer(name=self.name)
@@ -80,6 +81,59 @@ class BLEServer:
         )
         self.server.get_characteristic(CHARGER_CHAR_UUID).value = self.charger_data
         self.server.update_value(SERVICE_UUID, CHARGER_CHAR_UUID)
+
+    def update_weather(self, weather_json):
+        current = weather_json.get('current', {})
+        current_time = int(time.time() / 60)
+        current_temp = current.get('temperature_2m', 0.0)
+        current_code = current.get('weather_code', 0)
+
+        daily = weather_json.get('daily', {})
+        temp_mins = daily.get('temperature_2m_min', [0.0, 0.0, 0.0])
+        temp_maxs = daily.get('temperature_2m_max', [0.0, 0.0, 0.0])
+        weather_codes = daily.get('weather_code', [0, 0, 0])
+        precipitations = daily.get('precipitation_sum', [0.0, 0.0, 0.0])
+
+        def get_element(lst, idx, default):
+            if lst and idx < len(lst) and lst[idx] is not None:
+                return lst[idx]
+            return default
+
+        d0_min = get_element(temp_mins, 0, 0.0)
+        d0_max = get_element(temp_maxs, 0, 0.0)
+        d0_code = get_element(weather_codes, 0, 0)
+        d0_prec = get_element(precipitations, 0, 0.0)
+
+        d1_min = get_element(temp_mins, 1, 0.0)
+        d1_max = get_element(temp_maxs, 1, 0.0)
+        d1_code = get_element(weather_codes, 1, 0)
+        d1_prec = get_element(precipitations, 1, 0.0)
+
+        d2_min = get_element(temp_mins, 2, 0.0)
+        d2_max = get_element(temp_maxs, 2, 0.0)
+        d2_code = get_element(weather_codes, 2, 0)
+        d2_prec = get_element(precipitations, 2, 0.0)
+
+        self.weather_data = struct.pack(
+            '<IhBhhBHhhBHhhBH',
+            current_time,
+            int(round(current_temp * 10)),
+            int(current_code),
+            int(round(d0_min * 10)),
+            int(round(d0_max * 10)),
+            int(d0_code),
+            int(round(d0_prec * 10)),
+            int(round(d1_min * 10)),
+            int(round(d1_max * 10)),
+            int(d1_code),
+            int(round(d1_prec * 10)),
+            int(round(d2_min * 10)),
+            int(round(d2_max * 10)),
+            int(d2_code),
+            int(round(d2_prec * 10)),
+        )
+        self.server.get_characteristic(WEATHER_CHAR_UUID).value = self.weather_data
+        self.server.update_value(SERVICE_UUID, WEATHER_CHAR_UUID)
 
     def _on_read(self, characteristic: BlessGATTCharacteristic, **kwargs):
         return characteristic.value

@@ -5,6 +5,7 @@ import os
 import sys
 import asyncio
 import time
+import requests
 from renogybt import EcoWorthyClient, DCChargerClient, BleEspClient, BLEServer, filter_fields
 
 logging.basicConfig(level=logging.INFO)
@@ -42,11 +43,38 @@ def process_data(data):
         log_influxdb3(filtered_data['__name'], json_data=filtered_data)
 
 
+async def weather_poll_loop(ble_server, gps_coords):
+    while True:
+        try:
+            lat = gps_coords.get('lat')
+            lon = gps_coords.get('lon')
+            if lat is not None and lon is not None:
+                logging.info(f"Polling weather for lat={lat}, lon={lon}")
+                url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&current=temperature_2m,weather_code&timezone=auto&forecast_days=3&timeformat=unixtime"
+                
+                response = await asyncio.to_thread(requests.get, url, timeout=15)
+                response.raise_for_status()
+                weather_json = response.json()
+                
+                if ble_server.running:
+                    ble_server.update_weather(weather_json)
+                    logging.info("Weather characteristic updated successfully")
+            else:
+                logging.warning("Weather polling skipped: GPS location not yet resolved")
+        except Exception as e:
+            logging.error(f"Error in weather polling loop: {e}")
+        
+        await asyncio.sleep(600)
+
+
 async def main():
     gps = BleEspClient(config['gps'])
     charger = DCChargerClient(config['charger'])
     battery = EcoWorthyClient(config['battery'])
     ble_server = BLEServer(name=config.get('ble_server', 'name', fallback='SolarBLE'))
+
+    gps_coords = {'lat': None, 'lon': None}
+    weather_task = None
 
     try:
         await ble_server.start()
@@ -54,11 +82,15 @@ async def main():
         await asyncio.wait_for(battery.connect(), 35.0)
 
         if config['data'].getboolean('enable_polling'):
+            weather_task = asyncio.create_task(weather_poll_loop(ble_server, gps_coords))
             last_read = 0
             while True:
                 try:
                     await asyncio.wait_for(gps.connect(), 18.0)
                     data = await asyncio.wait_for(gps.read(), 10.0)
+                    if data.get('lat') is not None and data.get('lon') is not None:
+                        gps_coords['lat'] = data['lat']
+                        gps_coords['lon'] = data['lon']
                     process_data(data)
                 except Exception:
                     pass
@@ -104,6 +136,12 @@ async def main():
                 )
 
     finally:
+        if weather_task:
+            weather_task.cancel()
+            try:
+                await weather_task
+            except asyncio.CancelledError:
+                pass
         await ble_server.stop()
         await asyncio.wait_for(charger.disconnect(), 5.0)
         await asyncio.wait_for(battery.disconnect(), 5.0)

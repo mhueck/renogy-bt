@@ -36,7 +36,26 @@ Total: 9 bytes
 
 ### Weather — `0000ff13-0000-1000-8000-00805f9b34fb`
 
-Reserved for future use. Currently empty (0 bytes).
+28 bytes, struct format `<IhBhhBHhhBHhhBH`:
+
+| Offset | Size | Type | Field | Unit | Notes |
+|---|---|---|---|---|---|
+| 0 | 4 | uint32 | current_time_min | minutes | Unix timestamp / 60 |
+| 4 | 2 | int16 | current_temp | °C×10 | Signed. Divide by 10. |
+| 6 | 1 | uint8 | current_weather_code | WMO code | 0–99 |
+| 7 | 2 | int16 | today_temp_min | °C×10 | Signed. |
+| 9 | 2 | int16 | today_temp_max | °C×10 | Signed. |
+| 11 | 1 | uint8 | today_weather_code | WMO code | 0–99 |
+| 12 | 2 | uint16 | today_precipitation | mm×10 | |
+| 14 | 2 | int16 | tomorrow_temp_min | °C×10 | Signed. |
+| 16 | 2 | int16 | tomorrow_temp_max | °C×10 | Signed. |
+| 18 | 1 | uint8 | tomorrow_weather_code | WMO code | 0–99 |
+| 19 | 2 | uint16 | tomorrow_precipitation | mm×10 | |
+| 21 | 2 | int16 | day_after_temp_min | °C×10 | Signed. |
+| 23 | 2 | int16 | day_after_temp_max | °C×10 | Signed. |
+| 25 | 1 | uint8 | day_after_weather_code | WMO code | 0–99 |
+| 26 | 2 | uint16 | day_after_precipitation | mm×10 | |
+
 
 ## ESP32 Decoding Example (Arduino/C++)
 
@@ -61,6 +80,20 @@ struct __attribute__((packed)) ChargerData {
     uint16_t alternator_power_x10;
 };
 
+struct __attribute__((packed)) DailyForecast {
+    int16_t temp_min_x10;
+    int16_t temp_max_x10;
+    uint8_t weather_code;
+    uint16_t precipitation_x10;
+};
+
+struct __attribute__((packed)) WeatherData {
+    uint32_t current_time_min;
+    int16_t current_temp_x10;
+    uint8_t current_weather_code;
+    DailyForecast forecast[3];
+};
+
 // After reading the characteristic value into `value` (std::string):
 void decodeBattery(std::string &value) {
     if (value.length() < sizeof(BatteryData)) return;
@@ -80,15 +113,32 @@ void decodeCharger(std::string &value) {
     float solar_power = d->solar_power_x10 / 10.0f;
     float alternator_power = d->alternator_power_x10 / 10.0f;
 }
+
+void decodeWeather(std::string &value) {
+    if (value.length() < sizeof(WeatherData)) return;
+    WeatherData *d = (WeatherData *)value.data();
+
+    uint32_t current_time_min = d->current_time_min;
+    float current_temp = d->current_temp_x10 / 10.0f;
+    uint8_t current_weather_code = d->current_weather_code;
+
+    for (int i = 0; i < 3; i++) {
+        float temp_min = d->forecast[i].temp_min_x10 / 10.0f;
+        float temp_max = d->forecast[i].temp_max_x10 / 10.0f;
+        uint8_t weather_code = d->forecast[i].weather_code;
+        float precipitation = d->forecast[i].precipitation_x10 / 10.0f;
+    }
+}
 ```
 
 ## Polling Notes
 
-- Server updates data approximately every 57 seconds.
+- Server updates battery/charger data approximately every 57 seconds.
 - Recommended client poll interval: 60 seconds or longer.
 - If battery characteristic reads all zeros, the server has not yet completed its first poll cycle.
 - `pct_change_1h` will be 0 until the server has accumulated ~60 minutes of history.
 
-## Future: Weather Characteristic
+## Weather Characteristic
 
-The weather characteristic (`ff13`) will be populated in a future update. The ESP32 client should handle a 0-length read gracefully (skip decoding if length is 0).
+The weather characteristic (`ff13`) is updated every 10 minutes based on GPS data fetched from Open-Meteo. The ESP32 client should verify the length is 28 bytes before decoding.
+
