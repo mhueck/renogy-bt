@@ -4,6 +4,7 @@ import time
 import asyncio
 from collections import deque
 from bleak import BleakClient, BleakScanner
+from .BLEManager import BLEManager
 
 SERVICE_UUID = "0000ff10-0000-1000-8000-00805f9b34fb"
 BATTERY_CHAR_UUID = "0000ff11-0000-1000-8000-00805f9b34fb"
@@ -40,13 +41,20 @@ class BLEClient:
             except asyncio.CancelledError:
                 pass
             self.send_task = None
+        await self._safe_disconnect()
+        logging.info("BLE client stopped")
+
+    async def _safe_disconnect(self):
         if self.client:
             try:
-                await self.client.disconnect()
-            except Exception:
-                pass
-            self.client = None
-        logging.info("BLE client stopped")
+                async with BLEManager.connection_lock:
+                    if self.client:
+                        logging.info("Disconnecting BLEClient from BLE server...")
+                        await self.client.disconnect()
+            except Exception as e:
+                logging.warning(f"Error during BLEClient disconnect: {e}")
+            finally:
+                self.client = None
 
     def update_battery(self, percentage, power, voltage, temperature):
         now = time.time()
@@ -137,39 +145,21 @@ class BLEClient:
             try:
                 if not self.client or not self.client.is_connected:
                     target_identifier = self.mac_addr if self.mac_addr else self.name
-                    logging.info(f"Connecting to BLE server: {target_identifier}")
                     
-                    device = None
-                    retries = 3
-                    for attempt in range(retries):
-                        try:
-                            if self.mac_addr:
-                                device = await BleakScanner.find_device_by_address(self.mac_addr, timeout=15.0)
-                            else:
-                                device = await BleakScanner.find_device_by_name(self.name, timeout=15.0)
-                            break
-                        except Exception as scan_err:
-                            if "InProgress" in str(scan_err) and attempt < retries - 1:
-                                logging.warning(f"Scan operation in progress, retrying in 3 seconds... (attempt {attempt + 1}/{retries})")
-                                await asyncio.sleep(3.0)
-                            else:
-                                raise
+                    async with BLEManager.connection_lock:
+                        logging.info(f"Connecting to BLE server: {target_identifier}")
+                        
+                        if self.mac_addr:
+                            device = await BleakScanner.find_device_by_address(self.mac_addr, timeout=10.0)
+                        else:
+                            device = await BleakScanner.find_device_by_name(self.name, timeout=10.0)
 
-                    if device:
-                        self.client = BleakClient(device)
-                        for attempt in range(retries):
-                            try:
-                                await self.client.connect(timeout=15.0)
-                                logging.info(f"Connected to BLE server: {device}")
-                                break
-                            except Exception as conn_err:
-                                if "InProgress" in str(conn_err) and attempt < retries - 1:
-                                    logging.warning(f"Connection operation in progress, retrying in 3 seconds... (attempt {attempt + 1}/{retries})")
-                                    await asyncio.sleep(3.0)
-                                else:
-                                    raise
-                    else:
-                        logging.warning(f"BLE server device '{target_identifier}' not found")
+                        if device:
+                            self.client = BleakClient(device)
+                            await self.client.connect(timeout=15.0)
+                            logging.info(f"Connected to BLE server: {device}")
+                        else:
+                            logging.warning(f"BLE server device '{target_identifier}' not found")
 
                 if self.client and self.client.is_connected:
                     if self.battery_data:
@@ -183,11 +173,6 @@ class BLEClient:
                         await self.client.write_gatt_char(WEATHER_CHAR_UUID, self.weather_data, response=False)
             except Exception as e:
                 logging.error(f"Error in BLEClient send loop: {e}")
-                if self.client:
-                    try:
-                        await self.client.disconnect()
-                    except Exception:
-                        pass
-                    self.client = None
+                await self._safe_disconnect()
 
             await asyncio.sleep(60.0)

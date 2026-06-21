@@ -53,16 +53,19 @@ class RenogyClient:
             await self._read_section()
             await asyncio.wait_for(self.read_done_event.wait(), READ_TIMEOUT)
             if self.read_error:
-                await self.disconnect()
+                await self._disconnect_internal()
                 raise Exception("Read error")
             return self.data
 
+    async def _disconnect_internal(self):
+        if self.ble_manager:
+            await self.ble_manager.disconnect()
+            self.ble_manager = None
+        self.connected = False
+
     async def disconnect(self):
         async with self._lock:
-            if self.ble_manager:
-                await self.ble_manager.disconnect()
-                self.ble_manager = None
-            self.connected = False
+            await self._disconnect_internal()
 
     async def _on_data_received(self, response):
         try:

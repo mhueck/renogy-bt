@@ -7,6 +7,8 @@ DISCOVERY_TIMEOUT = 10 # max wait time to complete the bluetooth scanning (secon
 CONNECTION_TIMEOUT = 25 # max wait time for BLE connection (seconds)
 
 class BLEManager:
+    connection_lock = asyncio.Lock()
+
     def __init__(self, mac_address, alias, on_data, write_service_uuid, notify_char_uuid, write_char_uuid):
         self.mac_address = mac_address
         self.device_alias = alias
@@ -20,35 +22,38 @@ class BLEManager:
         self.discovered_devices = []
 
     async def connect(self):
-        try:
-            if not self.device:
-                logging.info(f"Connecting to: {self.mac_address}")
-                self.device = await BleakScanner.find_device_by_address(self.mac_address, timeout=CONNECTION_TIMEOUT)
+        async with BLEManager.connection_lock:
+            try:
                 if not self.device:
-                    raise Exception(f"Cannot find device {self.mac_address}")
+                    logging.info(f"Connecting to: {self.mac_address}")
+                    self.device = await BleakScanner.find_device_by_address(self.mac_address, timeout=DISCOVERY_TIMEOUT)
+                    if not self.device:
+                        raise Exception(f"Cannot find device {self.mac_address}")
 
-            logging.info(f"Found device {self.device}")
-            self.client = BleakClient(self.device)
-            await self.client.connect(timeout=CONNECTION_TIMEOUT)
-            logging.info(f"Client connection: {self.client.is_connected}")
-            if not self.client.is_connected: 
-                raise Exception(f"Cannot connect to device {self.device}")
+                logging.info(f"Found device {self.device}")
+                self.client = BleakClient(self.device)
+                await self.client.connect(timeout=CONNECTION_TIMEOUT)
+                logging.info(f"Client connection: {self.client.is_connected}")
+                if not self.client.is_connected: 
+                    raise Exception(f"Cannot connect to device {self.device}")
 
-            for service in self.client.services:
-                for characteristic in service.characteristics:
-                    if characteristic.uuid == self.notify_char_uuid:
-                        await self.client.start_notify(characteristic,  self.notification_callback)
-                        logging.debug(f"subscribed to notification {characteristic.uuid}")
-                    if characteristic.uuid == self.write_char_uuid and service.uuid == self.write_service_uuid:
-                        self.write_char_handle = characteristic.handle
-                        logging.debug(f"found write characteristic {characteristic.uuid}, service {service.uuid}")
+                for service in self.client.services:
+                    for characteristic in service.characteristics:
+                        if characteristic.uuid == self.notify_char_uuid:
+                            await self.client.start_notify(characteristic,  self.notification_callback)
+                            logging.debug(f"subscribed to notification {characteristic.uuid}")
+                        if characteristic.uuid == self.write_char_uuid and service.uuid == self.write_service_uuid:
+                            self.write_char_handle = characteristic.handle
+                            logging.debug(f"found write characteristic {characteristic.uuid}, service {service.uuid}")
 
-        except asyncio.TimeoutError:
-            logging.error(f"Connection timeout after {CONNECTION_TIMEOUT} seconds")
-            raise
-        except Exception as e:
-            logging.error(f"Error connecting to device: {e}")
-            raise
+            except asyncio.TimeoutError:
+                logging.error(f"Connection timeout after {CONNECTION_TIMEOUT} seconds")
+                self.device = None
+                raise
+            except Exception as e:
+                self.device = None
+                logging.error(f"Error connecting to device {self.mac_address}: {e}")
+                raise
 
     async def notification_callback(self, characteristic, data: bytearray):
         logging.debug("notification_callback")
@@ -75,11 +80,26 @@ class BLEManager:
             raise  # Re-raise exception to propagate error up
 
     async def disconnect(self):
-        if self.client and self.client.is_connected:
-            try:
-                logging.debug(f"Exit: Disconnecting device: {self.client.name} {self.client.address}")
-                await self.client.stop_notify(self.notify_char_uuid)
-                await self.client.disconnect()
-            except Exception as e:
-                logging.warning(f'Error during disconnect {e}')
+        async with BLEManager.connection_lock:
+            if self.client and self.client.is_connected:
+                try:
+                    logging.debug(f"Exit: Disconnecting device: {self.client.name} {self.client.address}")
+                    try:
+                        await self.client.stop_notify(self.notify_char_uuid)
+                    except Exception as e:
+                        logging.warning(f"Error during stop_notify: {e}")
+                    
+                    retries = 3
+                    for attempt in range(retries):
+                        try:
+                            await self.client.disconnect()
+                            break
+                        except Exception as e:
+                            if "InProgress" in str(e) and attempt < retries - 1:
+                                logging.warning(f"Disconnect in progress, retrying in 3 seconds... (attempt {attempt + 1}/{retries})")
+                                await asyncio.sleep(3.0)
+                            else:
+                                raise
+                except Exception as e:
+                    logging.warning(f'Error during disconnect {e}')
             

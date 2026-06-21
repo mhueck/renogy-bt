@@ -78,13 +78,15 @@ async def main():
     )
 
     gps_coords = {'lat': None, 'lon': None}
-    weather_task = None
+    tasks = []
 
     enable_ble = config.getboolean('ble_client', 'enabled', fallback=config.getboolean('ble_server', 'enabled', fallback=True))
 
     try:
-        await asyncio.wait_for(charger.connect(), 35.0)
-        await asyncio.wait_for(battery.connect(), 35.0)
+        logging.info("Connecting to charger...")
+        await asyncio.wait_for(charger.connect(), 45.0)
+        logging.info("Connecting to battery...")
+        await asyncio.wait_for(battery.connect(), 45.0)
 
         if enable_ble:
             try:
@@ -95,40 +97,65 @@ async def main():
             logging.info("BLE client is disabled in config.")
 
         if config['data'].getboolean('enable_polling'):
-            weather_task = asyncio.create_task(weather_poll_loop(ble_client, gps_coords))
-            last_read = 0
-            while True:
-                try:
-                    await asyncio.wait_for(gps.connect(), 18.0)
-                    data = await asyncio.wait_for(gps.read(), 10.0)
-                    if data.get('lat') is not None and data.get('lon') is not None:
-                        gps_coords['lat'] = data['lat']
-                        gps_coords['lon'] = data['lon']
-                    process_data(data)
-                except Exception:
-                    pass
+            async def gps_loop():
+                while True:
+                    start_time = asyncio.get_event_loop().time()
+                    try:
+                        await asyncio.wait_for(gps.connect(), 15.0)
+                        data = await asyncio.wait_for(gps.read(), 10.0)
+                        if data.get('lat') is not None and data.get('lon') is not None:
+                            gps_coords['lat'] = data['lat']
+                            gps_coords['lon'] = data['lon']
+                        process_data(data)
+                    except Exception as gps_err:
+                        logging.debug(f"GPS connection/read skipped: {gps_err}")
+                        try:
+                            await gps.disconnect()
+                        except Exception:
+                            pass
+                        await asyncio.sleep(45.0)
+                    
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    sleep_time = max(0.1, 12.0 - elapsed)
+                    await asyncio.sleep(sleep_time)
 
-                time_ms = int(time.time() * 1000)
-                if time_ms - last_read > 57 * 1000:
-                    charger_data = await asyncio.wait_for(charger.read(), 10.0)
-                    battery_data = await asyncio.wait_for(battery.read(), 10.0)
-                    process_data(charger_data)
-                    process_data(battery_data)
-                    if ble_client.running:
-                        ble_client.update_battery(
-                            percentage=battery_data.get('percentage', 0),
-                            power=battery_data.get('power', 0),
-                            voltage=battery_data.get('voltage', 0),
-                            temperature=battery_data.get('temperature', 0),
-                        )
-                        ble_client.update_charger(
-                            pv_voltage=charger_data.get('pv_voltage', 0),
-                            pv_current=charger_data.get('pv_current', 0),
-                            alternator_voltage=charger_data.get('alternator_voltage', 0),
-                            alternator_current=charger_data.get('alternator_current', 0),
-                        )
-                    last_read = time_ms
-                await asyncio.sleep(12.0)
+            async def charger_battery_loop():
+                while True:
+                    start_time = asyncio.get_event_loop().time()
+                    try:
+                        logging.info("Reading charger data...")
+                        charger_data = await asyncio.wait_for(charger.read(), 20.0)
+                        logging.info("Reading battery data...")
+                        battery_data = await asyncio.wait_for(battery.read(), 20.0)
+                        process_data(charger_data)
+                        process_data(battery_data)
+
+                        if ble_client.running:
+                            ble_client.update_battery(
+                                percentage=battery_data.get('percentage', 0),
+                                power=battery_data.get('power', 0),
+                                voltage=battery_data.get('voltage', 0),
+                                temperature=battery_data.get('temperature', 0),
+                            )
+                            ble_client.update_charger(
+                                pv_voltage=charger_data.get('pv_voltage', 0),
+                                pv_current=charger_data.get('pv_current', 0),
+                                alternator_voltage=charger_data.get('alternator_voltage', 0),
+                                alternator_current=charger_data.get('alternator_current', 0),
+                            )
+                    except Exception as err:
+                        logging.critical(f"FATAL: Error reading from charger/battery: {err}. Exiting application.")
+                        raise err
+                    
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    sleep_time = max(0.1, 60.0 - elapsed)
+                    await asyncio.sleep(sleep_time)
+
+            tasks.append(asyncio.create_task(weather_poll_loop(ble_client, gps_coords)))
+            tasks.append(asyncio.create_task(gps_loop()))
+            tasks.append(asyncio.create_task(charger_battery_loop()))
+
+            await asyncio.gather(*tasks)
         else:
             charger_data = await asyncio.wait_for(charger.read(), 30.0)
             battery_data = await asyncio.wait_for(battery.read(), 30.0)
@@ -149,15 +176,19 @@ async def main():
                 )
 
     finally:
-        if weather_task:
-            weather_task.cancel()
-            try:
-                await weather_task
-            except asyncio.CancelledError:
-                pass
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         await ble_client.stop()
-        await asyncio.wait_for(charger.disconnect(), 5.0)
-        await asyncio.wait_for(battery.disconnect(), 5.0)
+        try:
+            await asyncio.wait_for(charger.disconnect(), 5.0)
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(battery.disconnect(), 5.0)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
