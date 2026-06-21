@@ -138,15 +138,36 @@ class BLEClient:
                 if not self.client or not self.client.is_connected:
                     target_identifier = self.mac_addr if self.mac_addr else self.name
                     logging.info(f"Connecting to BLE server: {target_identifier}")
-                    if self.mac_addr:
-                        device = await BleakScanner.find_device_by_address(self.mac_addr, timeout=15.0)
-                    else:
-                        device = await BleakScanner.find_device_by_name(self.name, timeout=15.0)
+                    
+                    device = None
+                    retries = 3
+                    for attempt in range(retries):
+                        try:
+                            if self.mac_addr:
+                                device = await BleakScanner.find_device_by_address(self.mac_addr, timeout=15.0)
+                            else:
+                                device = await BleakScanner.find_device_by_name(self.name, timeout=15.0)
+                            break
+                        except Exception as scan_err:
+                            if "InProgress" in str(scan_err) and attempt < retries - 1:
+                                logging.warning(f"Scan operation in progress, retrying in 3 seconds... (attempt {attempt + 1}/{retries})")
+                                await asyncio.sleep(3.0)
+                            else:
+                                raise
 
                     if device:
                         self.client = BleakClient(device)
-                        await self.client.connect(timeout=15.0)
-                        logging.info(f"Connected to BLE server: {device}")
+                        for attempt in range(retries):
+                            try:
+                                await self.client.connect(timeout=15.0)
+                                logging.info(f"Connected to BLE server: {device}")
+                                break
+                            except Exception as conn_err:
+                                if "InProgress" in str(conn_err) and attempt < retries - 1:
+                                    logging.warning(f"Connection operation in progress, retrying in 3 seconds... (attempt {attempt + 1}/{retries})")
+                                    await asyncio.sleep(3.0)
+                                else:
+                                    raise
                     else:
                         logging.warning(f"BLE server device '{target_identifier}' not found")
 

@@ -83,6 +83,9 @@ async def main():
     enable_ble = config.getboolean('ble_client', 'enabled', fallback=config.getboolean('ble_server', 'enabled', fallback=True))
 
     try:
+        await asyncio.wait_for(charger.connect(), 35.0)
+        await asyncio.wait_for(battery.connect(), 35.0)
+
         if enable_ble:
             try:
                 await ble_client.start()
@@ -90,9 +93,6 @@ async def main():
                 logging.error(f"Failed to start BLE client: {e}. Continuing without BLE client functionality.")
         else:
             logging.info("BLE client is disabled in config.")
-
-        await asyncio.wait_for(charger.connect(), 35.0)
-        await asyncio.wait_for(battery.connect(), 35.0)
 
         if config['data'].getboolean('enable_polling'):
             weather_task = asyncio.create_task(weather_poll_loop(ble_client, gps_coords))
