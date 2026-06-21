@@ -64,7 +64,7 @@ async def weather_poll_loop(ble_client, gps_coords):
         except Exception as e:
             logging.error(f"Error in weather polling loop: {e}")
         
-        await asyncio.sleep(600)
+        await asyncio.sleep(60)
 
 
 async def main():
