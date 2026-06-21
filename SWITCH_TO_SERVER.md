@@ -1,8 +1,17 @@
+# Switching from BLE Client back to BLE Server
+
+If you upgrade or change your Linux hardware and want to switch this application back into acting as a BLE Server, follow the steps below.
+
+---
+
+## Step 1: Restore `BLEServer.py`
+Create the file `renogybt/BLEServer.py` and write the following code into it:
+
+```python
 import logging
 import struct
 import time
 from collections import deque
-
 from bless import BlessServer, BlessGATTCharacteristic, GATTCharacteristicProperties, GATTAttributePermissions
 
 SERVICE_UUID = "0000ff10-0000-1000-8000-00805f9b34fb"
@@ -24,7 +33,6 @@ class BLEServer:
         self.battery_data = bytearray(9)
         self.charger_data = bytearray(4)
         self.weather_data = bytearray(28)
-
 
     async def start(self):
         self.server = BlessServer(name=self.name, adapter=self.adapter)
@@ -147,3 +155,43 @@ class BLEServer:
         if abs(closest[0] - target_time) > HOUR_SECONDS * 0.5:
             return 0.0
         return current_pct - closest[1]
+```
+
+---
+
+## Step 2: Update `renogybt/__init__.py`
+Modify `renogybt/__init__.py` to import `BLEServer` instead of `BLEClient`:
+
+```python
+from .DCChargerClient import DCChargerClient
+from .EcoWorthyClient import EcoWorthyClient
+from .BleEspClient import BleEspClient
+from .BLEServer import BLEServer
+from .Utils import filter_fields
+```
+
+---
+
+## Step 3: Update `main.py`
+In `main.py`, restore the `ble_server` variables and the `BLEServer` import:
+1. Change `from renogybt import ..., BLEClient, ...` back to `from renogybt import ..., BLEServer, ...`.
+2. Change the initialization of `ble_client` back to `ble_server`:
+   ```python
+   ble_server = BLEServer(
+       name=config.get('ble_server', 'name', fallback='SolarBLE'),
+       adapter=config.get('ble_server', 'adapter', fallback=None)
+   )
+   ```
+3. Change all calls like `ble_client.update_battery(...)`, `ble_client.update_charger(...)`, `ble_client.start()`, `ble_client.stop()`, and `ble_client.running` back to their `ble_server` equivalents.
+
+---
+
+## Step 4: Configure `config.ini`
+Replace the `[ble_client]` section with a `[ble_server]` section:
+
+```ini
+[ble_server]
+enabled = true
+name = SolarBLE
+adapter = hci1
+```
