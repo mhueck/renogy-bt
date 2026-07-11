@@ -93,7 +93,7 @@ class EcoWorthyClient:
                     data['voltage'] = bytes_to_int(payload, 0, 2, signed=False, scale=0.01)
                     data['current'] = bytes_to_int(payload, 2, 2, signed=True, scale=0.01)
                     data['capacity_remaining'] = bytes_to_int(payload, 4, 2, signed=False, scale=0.01)
-                    data['capacity'] = bytes_to_int(payload, 4, 2, signed=False, scale=0.01)
+                    data['capacity'] = bytes_to_int(payload, 6, 2, signed=False, scale=0.01)
                     data['temperature'] = bytes_to_int(payload, 23, 2, signed=False, scale=0.1) - 273.1
                     data['power'] = data['voltage'] * data['current']
                     data['percentage'] = 0 if data['capacity'] == 0 else 100.0 * data['capacity_remaining'] / data['capacity']

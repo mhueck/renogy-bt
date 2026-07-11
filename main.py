@@ -1,4 +1,7 @@
 import logging
+import json
+import atexit
+import signal
 import numbers
 import configparser
 import os
@@ -9,6 +12,50 @@ import requests
 from renogybt import EcoWorthyClient, DCChargerClient, BleEspClient, BLEClient, filter_fields
 
 logging.basicConfig(level=logging.INFO)
+
+# Global GPS coordinates dictionary
+gps_coords = {'lat': None, 'lon': None}
+coords_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'gps_coords.json')
+
+
+def load_gps_coords():
+    if os.path.exists(coords_path):
+        try:
+            with open(coords_path, 'r') as f:
+                saved = json.load(f)
+                if isinstance(saved, dict):
+                    gps_coords['lat'] = saved.get('lat')
+                    gps_coords['lon'] = saved.get('lon')
+                    logging.info(f"Loaded GPS coordinates from file system: {gps_coords}")
+        except Exception as e:
+            logging.error(f"Failed to load GPS coordinates from file system: {e}")
+
+
+def save_gps_coords():
+    try:
+        with open(coords_path, 'w') as f:
+            json.dump(gps_coords, f)
+        logging.info(f"Saved GPS coordinates to file system: {gps_coords}")
+    except Exception as e:
+        logging.error(f"Failed to save GPS coordinates to file system: {e}")
+
+
+atexit.register(save_gps_coords)
+
+
+def handle_sigterm(signum, frame):
+    logging.info(f"Received exit signal {signum}, initiating clean shutdown...")
+    sys.exit(0)
+
+
+try:
+    signal.signal(signal.SIGTERM, handle_sigterm)
+    signal.signal(signal.SIGHUP, handle_sigterm)
+except ValueError:
+    pass
+
+load_gps_coords()
+
 
 config_file = sys.argv[1] if len(sys.argv) > 1 else 'config.ini'
 config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), config_file)
@@ -77,7 +124,6 @@ async def main():
         name=config.get('ble_client', 'name', fallback=config.get('ble_server', 'name', fallback='SolarBLE'))
     )
 
-    gps_coords = {'lat': None, 'lon': None}
     tasks = []
 
     enable_ble = config.getboolean('ble_client', 'enabled', fallback=config.getboolean('ble_server', 'enabled', fallback=True))
