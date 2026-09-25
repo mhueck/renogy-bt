@@ -9,7 +9,7 @@ import sys
 import asyncio
 import time
 import requests
-from renogybt import EcoWorthyClient, DCChargerClient, BleEspClient, BLEClient, filter_fields
+from renogybt import EcoWorthyClient, DCChargerClient, BleEspClient, BLEClient, DometicClient, filter_fields
 
 logging.basicConfig(level=logging.INFO)
 
@@ -118,7 +118,15 @@ async def main():
     gps = BleEspClient(config['gps'])
     charger = DCChargerClient(config['charger'])
     battery = EcoWorthyClient(config['battery'])
-    
+
+    fridge = None
+    if config.has_section('fridge') and config['fridge'].getboolean('enabled', fallback=False):
+        if config['fridge'].get('mac_addr'):
+            fridge = DometicClient(config['fridge'])
+        else:
+            logging.warning("Fridge is enabled but mac_addr is empty, skipping. "
+                            "Run tools/dometic_probe.py to find it.")
+
     ble_client = BLEClient(
         mac_addr=config.get('ble_client', 'mac_addr', fallback=config.get('ble_server', 'mac_addr', fallback=None)),
         name=config.get('ble_client', 'name', fallback=config.get('ble_server', 'name', fallback='SolarBLE'))
@@ -197,9 +205,39 @@ async def main():
                     sleep_time = max(0.1, 60.0 - elapsed)
                     await asyncio.sleep(sleep_time)
 
+            async def fridge_loop():
+                # Tolerated like the GPS loop: losing the fridge must not take
+                # down solar monitoring. The DDM protocol is push based, so the
+                # connection is held open and read() only snapshots what has
+                # already been published.
+                backoff = 15.0
+                while True:
+                    start_time = asyncio.get_event_loop().time()
+                    try:
+                        await asyncio.wait_for(fridge.connect(), 60.0)
+                        data = await asyncio.wait_for(fridge.read(), 15.0)
+                        process_data(data)
+                        if ble_client.running:
+                            ble_client.update_fridge(data)
+                        backoff = 15.0
+                    except Exception as fridge_err:
+                        logging.warning(f"Fridge connection/read failed: {fridge_err}")
+                        try:
+                            await fridge.disconnect()
+                        except Exception:
+                            pass
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, 300.0)
+                        continue
+
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    await asyncio.sleep(max(0.1, 60.0 - elapsed))
+
             tasks.append(asyncio.create_task(weather_poll_loop(ble_client, gps_coords)))
             tasks.append(asyncio.create_task(gps_loop()))
             tasks.append(asyncio.create_task(charger_battery_loop()))
+            if fridge:
+                tasks.append(asyncio.create_task(fridge_loop()))
 
             await asyncio.gather(*tasks)
         else:
@@ -220,6 +258,18 @@ async def main():
                     alternator_voltage=charger_data.get('alternator_voltage', 0),
                     alternator_current=charger_data.get('alternator_current', 0),
                 )
+            if fridge:
+                try:
+                    await asyncio.wait_for(fridge.connect(), 60.0)
+                    # A single-shot run has no history, so give the cooler a
+                    # moment to push its initial state before snapshotting.
+                    await asyncio.sleep(5.0)
+                    fridge_data = await asyncio.wait_for(fridge.read(), 15.0)
+                    process_data(fridge_data)
+                    if ble_client.running:
+                        ble_client.update_fridge(fridge_data)
+                except Exception as fridge_err:
+                    logging.warning(f"Fridge read failed: {fridge_err}")
 
     finally:
         for t in tasks:
@@ -235,6 +285,11 @@ async def main():
             await asyncio.wait_for(battery.disconnect(), 5.0)
         except Exception:
             pass
+        if fridge:
+            try:
+                await asyncio.wait_for(fridge.disconnect(), 5.0)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

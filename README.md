@@ -88,6 +88,76 @@ If you have multiple devices connected to a single BT-2 module (daisy chained or
 | Renogy Rego RIV1230RCH (Built-in BLE) | Inverter | - | ✅ |
 | Renogy Smart Shunt | Shunt | - | ❌ |
 
+## Dometic CFX fridge
+
+A Dometic CFX portable fridge can be polled alongside the solar gear. It reports
+per-compartment temperatures, supply voltage, current draw, and a locally
+integrated watt-hour total for the trailing hour, all of which are forwarded to
+the BLE display on characteristic `ff14` (see [BLE_CLIENT_SPEC.md](BLE_CLIENT_SPEC.md)).
+
+**Which protocol does my fridge speak?** Dometic ships two incompatible
+generations of its "DDM" pub/sub protocol, and the model badge does not tell you
+which one you have — a 75DZ exists as both a CFX3 and a CFX5. They differ in GATT
+service, action bytes, topic addressing and value encoding, with no overlap:
+
+| Generation | Models | GATT service |
+| :-- | :-- | :-- |
+| DDM1 | CFX3 | `537a0300-0995-481f-926c-1604e23fd515` |
+| DDM2 | CFX2, CFX5 (firmware `MC1`/`MC2`/`MC3`) | `537a0400-0995-481f-926c-1604e23fd515` |
+
+Both are implemented here and `protocol = auto` picks whichever service the
+cooler actually exposes, so you normally do not need to care.
+
+**Setup.**
+
+1. Put the fridge into Bluetooth **PAIR** mode (hold the Bluetooth button until
+   the symbol blinks — the window is about 60 seconds). The cooler exposes *no*
+   GATT services until it is bonded, and it accepts only **one** BLE connection,
+   so close the Dometic phone app first.
+2. Find the fridge and confirm its protocol:
+   ```sh
+   python3 tools/dometic_probe.py                      # scan
+   python3 tools/dometic_probe.py AA:BB:CC:DD:EE:FF    # connect and dump frames
+   ```
+   The probe prints the detected protocol, every topic it receives, and the
+   computed power draw. CFX3 units advertise as `CFX3_...`; CFX5 units as
+   `MC1_<mac tail>`.
+3. Fill in the `[fridge]` section of `config.ini` with the `mac_addr`.
+
+**Known limitations.**
+
+- **There is no watt or watt-hour reading in either protocol.** Neither
+  generation exposes a W, Wh, kWh or Ah parameter for the cooler, so power is
+  computed as voltage × current and the hourly energy total is derived here.
+  - On **DDM2** it is integrated locally by trapezoid over a 3600 s window. It
+    therefore under-reports until the program has been running an hour, and gaps
+    while the fridge was disconnected contribute nothing rather than being
+    extrapolated.
+  - On **DDM1** it is taken from the fridge's own hour-history array instead —
+    six 10-minute buckets of average amps are exactly one hour, which is more
+    accurate than integrating the stale bucket value as if it were live.
+  - Either way, bit 7 of the display flags byte says whether the figure covers a
+    genuine full hour. Treat it as provisional until that bit is set.
+- **CFX3 has no live current topic at all.** On DDM1 the instantaneous draw is
+  the newest bucket of the hour history: an average over 10 minutes, and up to
+  10 minutes stale. DDM2/CFX5 does expose a live current reading.
+- **Dual-zone support is unverified on real hardware.** The upstream projects
+  hardware-validated single-zone CFX5 units only and explicitly mark dual-zone
+  experimental. A CFX5 95DZ owner did confirm the DDM2 service UUIDs, but the
+  per-compartment array handling has not been checked on a DZ box. Run the probe
+  and confirm both compartments report sensible temperatures.
+- The bond is held by BlueZ and does not reliably survive a host reboot on some
+  setups; if the fridge stops reconnecting, put it back into PAIR mode.
+- Losing the fridge is non-fatal: it retries with backoff and the rest of the
+  program keeps running. If the cooler goes quiet for longer than `max_silence`
+  the connection is rebuilt rather than serving stale readings.
+
+**Provenance.** No vendor specification for this protocol is public. Every topic
+id, UUID and encoding here comes from third-party projects that reverse-engineered
+decompiled Dometic Android apps — see the references below. Details marked as
+unverified in those projects are unverified here too, and the tables should be
+confirmed against your own hardware with `tools/dometic_probe.py`.
+
 ## Data logging
 
 Supports logging data to local MQTT brokers like [Mosquitto](https://mosquitto.org/) or [Home Assistant](https://www.home-assistant.io/) dashboards. You can also log it to third party cloud services like [PVOutput](https://pvoutput.org/). See [config.ini](https://github.com/cyrils/renogy-bt1/blob/main/config.ini) for more details. Note that free PVOutput accounts have a cap of one request per minute.
@@ -136,6 +206,19 @@ If you want to monitor real-time data, turn on polling in `config.ini` for conti
 ¹This is not an official library endorsed by the device manufacturer. Renogy and all other trademarks in this repo are the property of their respective owners and their use herein does not imply any sponsorship or endorsement.
 
 ## References
+
+**Dometic CFX / DDM protocol** — all reverse-engineered from decompiled Dometic
+Android apps; there is no vendor specification.
+
+ - [philippe-a11y/home-assistant-dometic-cfx](https://github.com/philippe-a11y/home-assistant-dometic-cfx) — implements both DDM1 and DDM2; source of the DDM2 GATT UUIDs, the `(param, 0, 0, 0x1A)` cooler-class topic scheme, the firmware-id family table, and the `power = voltage × current` derivation. Also documents the Linux/BlueZ bonding problems.
+ - [icodeforyou/ha-dometic-ddm](https://github.com/icodeforyou/ha-dometic-ddm) — the `pyddm` library, its frame-format documentation, and `ddm2_parameters.json`, a parameter dictionary extracted from the Dometic Power app giving param id, unit, scaling factor and enum labels for every DDM2 parameter. Also carries the richer 86-topic DDM1 table and a real CFX3 session capture.
+ - [mlamoure/dometic-ddmp](https://github.com/mlamoure/dometic-ddmp) — DDM2 library verified against a CFX5 25 on firmware `MC1_1.0.2`.
+ - [philippe-a11y/esphome-dometic-cfx5](https://github.com/philippe-a11y/esphome-dometic-cfx5) — ESPHome DDM2 component.
+ - [andrewbackway/esphome-dometic_cfx_ble](https://github.com/andrewbackway/esphome-dometic_cfx_ble) — ESPHome DDM1 component; its `protocol.md` is the clearest DDM1 write-up and it ships a runnable bleak test script.
+ - [keshavdv/dometic-cfx3](https://github.com/keshavdv/dometic-cfx3) — DDM1 over WiFi TCP rather than BLE; source of the original 64-topic table.
+ - [phil-gao/cfx3-ble-logger](https://github.com/phil-gao/cfx3-ble-logger) — documents the BlueZ traps when talking to a bonded cooler from plain Linux.
+
+**Renogy**
 
  - [Olen/solar-monitor](https://github.com/Olen/solar-monitor)
  - [corbinbs/solarshed](https://github.com/corbinbs/solarshed)
