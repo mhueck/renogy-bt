@@ -61,9 +61,18 @@ async def scan(seconds):
         if not is_dometic or device.address in found:
             return
         found[device.address] = True
-        hint = 'DDM1/CFX3' if DDM1_SERVICE_UUID in uuids else (
-            'DDM2/CFX2-CFX5' if DDM2_SERVICE_UUID in uuids else 'unknown (name match)')
+        if DDM1_SERVICE_UUID in uuids:
+            hint = 'DDM1/CFX3 (service UUID advertised)'
+        elif DDM2_SERVICE_UUID in uuids:
+            hint = 'DDM2/CFX2-CFX5 (service UUID advertised)'
+        elif name.upper().startswith(('MC1', 'MC2', 'MC3')):
+            hint = 'DDM2/CFX2-CFX5 (name match)'
+        elif name.upper().startswith('CFX3'):
+            hint = 'DDM1/CFX3 (name match)'
+        else:
+            hint = 'Dometic candidate (name match)'
         print(f"  {device.address}  rssi={adv.rssi:>5}  name={name!r}  -> {hint}")
+        print(f"uuids: {uuids}")
         if adv.service_uuids:
             print(f"      service_uuids: {adv.service_uuids}")
         if adv.manufacturer_data:

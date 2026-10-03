@@ -698,7 +698,7 @@ def _decode(payload, kind):
             return struct.unpack('<H', payload[:2])[0] / 10.0 if len(payload) >= 2 else None
         if kind == 'str':
             end = payload.find(b'\x00')
-            return payload[:end if end >= 0 else len(payload)].decode('utf-8', errors='replace')
+            return payload[:end if end >= 0 else len(payload)].decode('utf-8', errors='replace').strip()
         if kind == 'history':
             if len(payload) < 15:
                 return None
