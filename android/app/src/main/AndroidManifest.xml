@@ -46,7 +46,7 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:windowSoftInputMode="adjustResize"
-        android:theme="@style/Theme.RenogyBT">
+        android:theme="@style/Theme.SolStation">
 
         <activity
             android:name=".MainActivity"

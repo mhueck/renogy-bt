@@ -30,6 +30,6 @@ plugins {
   id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
-rootProject.name = "RenogyBT"
+rootProject.name = "SolStation"
 
 include(":app")

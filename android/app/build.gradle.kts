@@ -5,10 +5,10 @@ plugins {
 }
 
 android {
-  namespace = "com.example.renogybt"
+  namespace = "net.mhu.solstation"
   compileSdk = 36
   defaultConfig {
-    applicationId = "com.example.renogybt"
+    applicationId = "net.mhu.solstation"
     minSdk = 26
     targetSdk = 36
     versionCode = 1

@@ -1,4 +1,4 @@
-# RenogyBT Android App
+# SolStation Android App
 
 An Android application (Kotlin + Jetpack Compose) that replicates the Python `renogy-bt` solar monitoring daemon on Android, with:
 - **Multi-device BLE Polling** (non-fatal with automatic GATT cache recovery and UI status/staleness indicators):
@@ -69,6 +69,6 @@ Alternatives:
 - Install and launch with the Android CLI: `android run --apks=app/build/outputs/apk/debug/app-debug.apk`
 
 ### 5. Recommended Van Setup on Android
-1. Open **RenogyBT** and grant the Bluetooth (Scan / Connect / Advertise) and Notification permissions.
-2. On Android, open **Settings → Apps → RenogyBT → App battery usage** and set it to **Unrestricted** so Android never throttles continuous background BLE polling or `SolarBLE` GATT server advertising.
+1. Open **SolStation** and grant the Bluetooth (Scan / Connect / Advertise) and Notification permissions.
+2. On Android, open **Settings → Apps → SolStation → App battery usage** and set it to **Unrestricted** so Android never throttles continuous background BLE polling or `SolarBLE` GATT server advertising.
 3. Open the **Settings** tab in the app, verify your BLE MAC addresses and InfluxDB 2.0 URL / Org / Bucket / Token, tap **Save Settings & Apply**, and tap **Start**.
