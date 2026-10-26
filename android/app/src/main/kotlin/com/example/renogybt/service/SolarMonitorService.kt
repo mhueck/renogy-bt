@@ -5,13 +5,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.example.renogybt.MainActivity
 import com.example.renogybt.ble.BleEspClient
 import com.example.renogybt.ble.DCChargerClient
@@ -27,8 +31,11 @@ import com.example.renogybt.network.InfluxDb2Client
 import com.example.renogybt.network.WeatherClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -42,6 +49,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
@@ -92,17 +100,41 @@ class SolarMonitorService : Service() {
     private val retrySignal = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     private var monitorJob: Job? = null
 
+    @Volatile
     private var gattServer: SolarBleGattServer? = null
     private var chargerClient: DCChargerClient? = null
     private var batteryClient: EcoWorthyClient? = null
     private var gpsClient: BleEspClient? = null
     private var fridgeClient: DometicClient? = null
 
+    /**
+     * A Bluetooth off/on or stack restart silently kills the GATT server and advertiser, and
+     * nothing else would bring them back. Sensor clients need no help: they reconnect on their own.
+     */
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1) != BluetoothAdapter.STATE_ON) return
+            val server = gattServer ?: return
+            AppLogger.info("Bluetooth turned on, restarting BLE GATT Server")
+            try {
+                server.restart()
+            } catch (e: Exception) {
+                AppLogger.error("Failed to restart BLE GATT Server", e)
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        ContextCompat.registerReceiver(
+            this,
+            bluetoothStateReceiver,
+            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -129,6 +161,10 @@ class SolarMonitorService : Service() {
     }
 
     override fun onDestroy() {
+        try {
+            unregisterReceiver(bluetoothStateReceiver)
+        } catch (_: Exception) {
+        }
         stopMonitoringInternal()
         serviceScope.cancel()
         super.onDestroy()
@@ -279,21 +315,38 @@ class SolarMonitorService : Service() {
         stopSelf()
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     private fun startMonitoring() {
-        monitorJob?.cancel()
-        monitorJob = serviceScope.launch {
+        // On a restart (e.g. Save while running) the old pipeline's GATT server and sensor links
+        // must be released first, or they stay open: a duplicate FF10 server, and peripherals held
+        // by a dead client so they stop advertising to the new one.
+        val oldJob = monitorJob
+        oldJob?.cancel()
+        val disconnectOldClients = detachPipelineResources()
+        monitorJob = serviceScope.launch(start = CoroutineStart.ATOMIC) {
+            withContext(NonCancellable) {
+                oldJob?.join()
+                disconnectOldClients()
+            }
+            // A later start/stop may have superseded this one while it waited
+            ensureActive()
             runMonitorPipeline()
         }
     }
 
-    private fun stopMonitoringInternal() {
-        monitorJob?.cancel()
-        monitorJob = null
+    /**
+     * Stops the GATT server and detaches the sensor clients, returning a block that disconnects
+     * them. Run that block non-cancellably: a cancelled disconnect waiting on the shared
+     * connectionLock would skip closing the remaining links.
+     */
+    private fun detachPipelineResources(): suspend () -> Unit {
         try {
             gattServer?.stop()
         } catch (_: Exception) {
         }
         gattServer = null
+        // The old pipeline's state collector is already cancelled, so publish the closed server here
+        _state.update { it.copy(bleServer = it.bleServer.copy(advertising = false, connectedDevicesCount = 0)) }
 
         val oldCharger = chargerClient
         val oldBattery = batteryClient
@@ -304,17 +357,27 @@ class SolarMonitorService : Service() {
         gpsClient = null
         fridgeClient = null
 
-        serviceScope.launch {
+        return {
             try { oldCharger?.disconnect(refreshCache = false) } catch (_: Exception) {}
             try { oldBattery?.disconnect(refreshCache = false) } catch (_: Exception) {}
             try { oldGps?.disconnect(refreshCache = false) } catch (_: Exception) {}
             try { oldFridge?.disconnect(refreshCache = false) } catch (_: Exception) {}
         }
+    }
+
+    @OptIn(DelicateCoroutinesApi::class)
+    private fun stopMonitoringInternal() {
+        monitorJob?.cancel()
+        monitorJob = null
+        val disconnectOldClients = detachPipelineResources()
+        // onDestroy cancels serviceScope right after this, so the disconnects must outlive it
+        serviceScope.launch(start = CoroutineStart.ATOMIC) {
+            withContext(NonCancellable) { disconnectOldClients() }
+        }
 
         _state.update {
             it.copy(
                 serviceRunning = false,
-                bleServer = it.bleServer.copy(advertising = false, connectedDevicesCount = 0),
                 chargerHealth = if (it.chargerHealth.phase == ConnectionPhase.DISABLED) it.chargerHealth else it.chargerHealth.copy(phase = ConnectionPhase.IDLE),
                 batteryHealth = if (it.batteryHealth.phase == ConnectionPhase.DISABLED) it.batteryHealth else it.batteryHealth.copy(phase = ConnectionPhase.IDLE),
                 fridgeHealth = if (it.fridgeHealth.phase == ConnectionPhase.DISABLED) it.fridgeHealth else it.fridgeHealth.copy(phase = ConnectionPhase.IDLE),
@@ -350,9 +413,9 @@ class SolarMonitorService : Service() {
 
         // 1. Start BLE GATT Server if enabled
         if (config.bleServer.enabled) {
+            val server = SolarBleGattServer(applicationContext, config.bleServer.name)
+            gattServer = server
             try {
-                val server = SolarBleGattServer(applicationContext, config.bleServer.name)
-                gattServer = server
                 launch {
                     server.state.collect { serverState ->
                         _state.update { it.copy(bleServer = serverState) }
@@ -361,6 +424,14 @@ class SolarMonitorService : Service() {
                 server.start()
             } catch (e: Exception) {
                 AppLogger.error("Failed to start BLE GATT Server", e)
+            }
+            // A start/stop that cancelled this run before the server was published missed it in
+            // its detach. gattServer is volatile, so either that detach saw the server or we see
+            // the cancellation here.
+            if (!isActive) {
+                try { server.stop() } catch (_: Exception) {}
+                if (gattServer === server) gattServer = null
+                ensureActive()
             }
         } else {
             AppLogger.info("BLE GATT Server is disabled in settings.")
@@ -489,6 +560,8 @@ class SolarMonitorService : Service() {
                 val failures = _state.value.chargerHealth.consecutiveFailures + 1
                 AppLogger.warn("Charger (${config.charger.alias}) poll failed: $errMsg")
                 try { charger.disconnect(refreshCache = failures % 3 == 0) } catch (_: Exception) {}
+                // The catch above also swallows a Stop landing mid-disconnect; don't carry on after it
+                currentCoroutineContext().ensureActive()
                 _state.update {
                     val prev = it.chargerHealth
                     it.copy(
@@ -548,6 +621,8 @@ class SolarMonitorService : Service() {
                 val failures = _state.value.batteryHealth.consecutiveFailures + 1
                 AppLogger.warn("Battery (${config.battery.alias}) poll failed: $errMsg")
                 try { battery.disconnect(refreshCache = failures % 3 == 0) } catch (_: Exception) {}
+                // The catch above also swallows a Stop landing mid-disconnect; don't carry on after it
+                currentCoroutineContext().ensureActive()
                 _state.update {
                     val prev = it.batteryHealth
                     it.copy(
@@ -669,6 +744,8 @@ class SolarMonitorService : Service() {
             // Normal when van is parked / ignition off — log at DEBUG and stay in calm STANDBY
             AppLogger.debug("GPS BLE not active ($bleError) — retaining last known good location")
             try { gps.disconnect(refreshCache = false) } catch (_: Exception) {}
+            // The catch above also swallows a Stop landing mid-disconnect; don't carry on after it
+            currentCoroutineContext().ensureActive()
             _state.update {
                 val prev = it.gpsHealth
                 it.copy(
@@ -761,6 +838,8 @@ class SolarMonitorService : Service() {
             val failures = _state.value.fridgeHealth.consecutiveFailures + 1
             AppLogger.warn("Fridge (${config.fridge.alias}) unreachable: $errMsg")
             try { fridge.disconnect(refreshCache = failures % 3 == 0) } catch (_: Exception) {}
+            // The catch above also swallows a Stop landing mid-disconnect; don't carry on after it
+            currentCoroutineContext().ensureActive()
             _state.update {
                 val prev = it.fridgeHealth
                 it.copy(

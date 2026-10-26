@@ -54,6 +54,10 @@ class SolarBleGattServer(
     private var gattServer: BluetoothGattServer? = null
     private var advertiser: BluetoothLeAdvertiser? = null
     private var originalAdapterName: String? = null
+    // stop() is final: each pipeline creates its own instance, so a late start()/restart() (e.g.
+    // from the Bluetooth receiver racing a teardown) must not reopen one nobody references anymore.
+    // Guarded by the instance monitor.
+    private var stopped = false
     private val connectedDevices = Collections.synchronizedSet(HashSet<BluetoothDevice>())
 
     private val pctHistory = ArrayDeque<Pair<Double, Double>>()
@@ -153,7 +157,9 @@ class SolarBleGattServer(
         }
     }
 
+    @Synchronized
     fun start() {
+        if (stopped) return
         val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
             ?: throw Exception("BluetoothManager unavailable")
         val adapter = btManager.adapter
@@ -163,12 +169,20 @@ class SolarBleGattServer(
         }
 
         try {
-            originalAdapterName = adapter.name
+            // Only capture once, so a restart() never records our own server name as the original
+            if (originalAdapterName == null) {
+                originalAdapterName = adapter.name
+            }
             if (serverName.isNotBlank() && adapter.name != serverName) {
                 adapter.name = serverName
             }
         } catch (e: Exception) {
             AppLogger.warn("Could not set Bluetooth adapter name to '$serverName': ${e.message}")
+        }
+
+        // A second start() (e.g. restart() racing the pipeline's start) replaces rather than leaks
+        if (gattServer != null || advertiser != null) {
+            closeServerAndAdvertiser()
         }
 
         val server = btManager.openGattServer(context, gattServerCallback)
@@ -235,7 +249,18 @@ class SolarBleGattServer(
         }
     }
 
-    fun stop() {
+    /**
+     * Reopens the GATT server and advertiser, keeping the cached payloads. Needed after a
+     * Bluetooth off/on or stack restart, which silently kills both.
+     */
+    @Synchronized
+    fun restart() {
+        if (stopped) return
+        closeServerAndAdvertiser()
+        start()
+    }
+
+    private fun closeServerAndAdvertiser() {
         try {
             advertiser?.stopAdvertising(advertiseCallback)
         } catch (_: Exception) {
@@ -249,6 +274,13 @@ class SolarBleGattServer(
         }
         gattServer = null
         connectedDevices.clear()
+        _state.update { it.copy(advertising = false, connectedDevicesCount = 0) }
+    }
+
+    @Synchronized
+    fun stop() {
+        stopped = true
+        closeServerAndAdvertiser()
 
         val origName = originalAdapterName
         if (origName != null) {
@@ -257,10 +289,6 @@ class SolarBleGattServer(
                 btManager?.adapter?.name = origName
             } catch (_: Exception) {
             }
-        }
-
-        _state.update {
-            it.copy(advertising = false, connectedDevicesCount = 0)
         }
         AppLogger.info("BLE GATT Server stopped")
     }

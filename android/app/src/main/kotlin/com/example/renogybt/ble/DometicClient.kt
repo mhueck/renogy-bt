@@ -7,6 +7,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -15,6 +16,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -342,30 +344,38 @@ class DometicClient(
 
             val manager = BleConnectionManager(context, config.macAddr, config.alias)
             manager.connect(tryDirectFirst = true, requestBond = config.pair)
-            detectProtocol(manager)
-
-            val nUuid = notifyUuid ?: throw Exception("Notify UUID not resolved for Dometic")
-            manager.enableNotifications(nUuid)
-            notifyJob = scope.launch {
-                manager.notifications.collect { (uuid, frame) ->
-                    if (uuid == nUuid) {
-                        onNotify(frame)
-                    }
-                }
-            }
             bleManager = manager
 
-            subscribe()
+            // Tear down on any failure from here on: an unbonded cooler exposes no DDM service,
+            // and leaking the live link would hold its single BLE connection on every retry.
             try {
-                withTimeout(FIRST_DATA_TIMEOUT_MS) {
-                    firstData.await()
+                detectProtocol(manager)
+
+                val nUuid = notifyUuid ?: throw Exception("Notify UUID not resolved for Dometic")
+                manager.enableNotifications(nUuid)
+                notifyJob = scope.launch {
+                    manager.notifications.collect { (uuid, frame) ->
+                        if (uuid == nUuid) {
+                            onNotify(frame)
+                        }
+                    }
+                }
+
+                subscribe()
+                try {
+                    withTimeout(FIRST_DATA_TIMEOUT_MS) {
+                        firstData.await()
+                    }
+                } catch (e: Exception) {
+                    currentCoroutineContext().ensureActive()
+                    throw Exception(
+                        "Dometic subscribed but published nothing. Verify bonding or ensure no other app holds the BLE connection."
+                    )
                 }
             } catch (e: Exception) {
-                currentCoroutineContext().ensureActive()
-                teardown()
-                throw Exception(
-                    "Dometic subscribed but published nothing. Verify bonding or ensure no other app holds the BLE connection."
-                )
+                // Refresh the GATT cache too: a table discovered before bonding lacks the DDM service
+                withContext(NonCancellable) { teardown(refreshCache = true) }
+                throw e
             }
             AppLogger.info("Dometic (${config.alias}) connected using protocol $protocol")
         }

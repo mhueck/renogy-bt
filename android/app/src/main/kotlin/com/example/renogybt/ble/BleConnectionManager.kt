@@ -16,10 +16,13 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import com.example.renogybt.service.AppLogger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -52,6 +55,8 @@ class BleConnectionManager(
         const val DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000L
         private const val CONNECTION_TIMEOUT_MS = 25_000L
         private const val TARGET_MTU = 517
+        private const val BOND_TIMEOUT_MS = 15_000L
+        private const val BOND_START_GRACE_MS = 1_500L
 
         @SuppressLint("MissingPermission")
         suspend fun scanDevices(context: Context, durationMs: Long = 5000L): List<ScannedBleDevice> {
@@ -316,22 +321,55 @@ class BleConnectionManager(
             }
         }
 
-        if (requestBond && device != null && device.bondState == BluetoothDevice.BOND_NONE) {
-            try {
-                device.createBond()
-                delay(1500L)
-                AppLogger.info("Initiated BLE bonding with $alias ($normalizedMac)")
-            } catch (e: Exception) {
-                AppLogger.debug("createBond skipped for $alias: ${e.message}")
-            }
-        }
-
         try {
+            if (requestBond && device != null) {
+                awaitBond(device, normalizedMac)
+            }
             discoverServices()
             negotiateMtu(TARGET_MTU)
         } catch (e: Exception) {
             closeInternal(refreshCache = true, waitDisconnect = true)
             throw e
+        }
+    }
+
+    /**
+     * Like Bleak's pair(), waits for the bond to finish before service discovery: a Dometic
+     * exposes no services until bonded, so discovering mid-pairing comes back empty.
+     */
+    private suspend fun awaitBond(device: BluetoothDevice, normalizedMac: String) {
+        try {
+            if (device.bondState == BluetoothDevice.BOND_NONE) {
+                // createBond() also returns false when the peer's Security Request already started it
+                if (!device.createBond() && device.bondState != BluetoothDevice.BOND_BONDING) {
+                    AppLogger.debug("createBond not started for $alias ($normalizedMac)")
+                    return
+                }
+                AppLogger.info("Initiated BLE bonding with $alias ($normalizedMac)")
+            }
+            val startedAt = SystemClock.elapsedRealtime()
+            val bonded = withTimeoutOrNull(BOND_TIMEOUT_MS) {
+                var sawBonding = false
+                var state = device.bondState
+                // This runs under connectionLock, so stop as soon as pairing can no longer succeed:
+                // NONE after BONDING (or after the grace period, since a fast rejection can slip
+                // between polls) means it was rejected, and a dropped link means it cannot finish.
+                while (state != BluetoothDevice.BOND_BONDED && isConnected &&
+                    !(state == BluetoothDevice.BOND_NONE &&
+                        (sawBonding || SystemClock.elapsedRealtime() - startedAt >= BOND_START_GRACE_MS))
+                ) {
+                    if (state == BluetoothDevice.BOND_BONDING) sawBonding = true
+                    delay(250L)
+                    state = device.bondState
+                }
+                state == BluetoothDevice.BOND_BONDED
+            } ?: false
+            if (!bonded) {
+                AppLogger.warn("Bonding with $alias ($normalizedMac) not completed (bondState=${device.bondState})")
+            }
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            AppLogger.debug("createBond skipped for $alias: ${e.message}")
         }
     }
 

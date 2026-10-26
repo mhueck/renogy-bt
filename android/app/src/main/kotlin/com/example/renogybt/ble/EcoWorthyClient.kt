@@ -7,6 +7,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -14,6 +15,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -180,7 +182,14 @@ class EcoWorthyClient(
                 requestBond = false,
                 allowDirectFallback = true
             )
-            manager.enableNotifications(NOTIFY_CHAR_UUID, WRITE_SERVICE_UUID)
+            try {
+                manager.enableNotifications(NOTIFY_CHAR_UUID, WRITE_SERVICE_UUID)
+            } catch (e: Exception) {
+                // The link is up but not yet owned by this client, so nothing else would close it:
+                // a leaked GATT keeps the peripheral's single connection and stops it advertising.
+                withContext(NonCancellable) { manager.disconnect() }
+                throw e
+            }
             notifyJob = scope.launch {
                 manager.notifications.collect { (uuid, chunk) ->
                     if (uuid == NOTIFY_CHAR_UUID) {
