@@ -629,13 +629,13 @@ class DometicClient(
         result["door_open_1"] = asInt(compartment("door_open", 1))
         result["cooler_power"] = asInt(values["cooler_power"])
         result["compressor_power"] = asInt(values["compressor_power"])
-        result["icemaker_power"] = asInt(values["icemaker_power"])
+        // result["icemaker_power"] = asInt(values["icemaker_power"])
         result["voltage"] = voltage
         result["current"] = current
         result["power"] = power
         result["energy_wh_1h"] = BigDecimal.valueOf(energyWh).setScale(3, RoundingMode.HALF_EVEN).toDouble()
         result["energy_window_seconds"] = energyCovered.toInt()
-        result["battery_protection_level"] = (values["battery_protection_level"] as? Number)?.toInt()
+        // result["battery_protection_level"] = (values["battery_protection_level"] as? Number)?.toInt()
         result["seconds_since_update"] = (nowSec - lastPublishAtSeconds).toInt()
 
         val sourceId = (values["power_source_id"] as? Number)?.toInt()
@@ -645,10 +645,10 @@ class DometicClient(
             result["power_source"] = labels[sourceId] ?: sourceId.toString()
         }
 
-        val level = (values["battery_protection_level"] as? Number)?.toInt()
-        if (level != null) {
-            result["battery_protection"] = BATTERY_PROTECTION_LEVELS[level] ?: level.toString()
-        }
+        // val level = (values["battery_protection_level"] as? Number)?.toInt()
+        // if (level != null) {
+        //     result["battery_protection"] = BATTERY_PROTECTION_LEVELS[level] ?: level.toString()
+        // }
 
         val errors = values["error_state"] as? List<*>
         if (errors != null) {
@@ -657,17 +657,17 @@ class DometicClient(
             result["error_count"] = null
         }
 
-        val productTypeId = (values["product_type_id"] as? Number)?.toInt()
-        if (productTypeId != null) {
-            result["product_type"] = D2_PRODUCT_TYPES[productTypeId] ?: productTypeId.toString()
-        }
+        // val productTypeId = (values["product_type_id"] as? Number)?.toInt()
+        // if (productTypeId != null) {
+        //     result["product_type"] = D2_PRODUCT_TYPES[productTypeId] ?: productTypeId.toString()
+        // }
 
-        for (key in listOf("device_name", "serial_number", "firmware_version", "firmware_id", "product_name", "cms_sku")) {
-            val v = values[key] as? String
-            if (!v.isNullOrEmpty()) {
-                result[key] = v
-            }
-        }
+        // for (key in listOf("device_name", "serial_number", "firmware_version", "firmware_id", "product_name", "cms_sku")) {
+        //     val v = values[key] as? String
+        //     if (!v.isNullOrEmpty()) {
+        //         result[key] = v
+        //     }
+        // }
 
         result["__device"] = config.alias
         result["__client"] = "DometicClient"

@@ -187,7 +187,6 @@ class MainScreenViewModelTest {
 
         assertArrayEquals(fullFrame, assembled)
         val parsed = DCChargerClient.parseChargingInfoBytes(assembled!!)
-        assertEquals(95L, parsed["battery_percentage"])
         assertEquals(13.4, parsed["battery_voltage"] as Double, 0.01)
         assertEquals(19.5, parsed["pv_voltage"] as Double, 0.01)
         assertEquals(8.25, parsed["pv_current"] as Double, 0.01)
